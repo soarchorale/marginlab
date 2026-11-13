@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="heading"><div><div class="eyebrow">ADMINISTRATION</div><h1>行情缓存与访问设置</h1><p>行情持久化保存在本机 SQLite 中，重启服务后仍可读取。</p></div></div>
+{% if saved %}<div class="cache-notice" role="status">设置已保存，超出保留范围的行情已清理。</div>{% endif %}
+<form action="/settings" method="post" class="toolbar"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>保留最近几个月<input name="history_months" type="number" min="1" max="36" value="{{ settings.months }}" required></label><label>刷新间隔（秒）<input name="refresh_seconds" type="number" min="60" max="86400" value="{{ settings.refresh_seconds }}" required></label><button class="primary" type="submit">保存设置</button><p class="footnote">缩短保留期限会清理更早的缓存；TqSdk 分钟行情按可用历史窗口增量积累，延长保留期限不会凭空补齐过去的期权报价。页面可见且登录有效时续订行情，关闭页面90秒后结束订阅。刷新间隔设置用于保留的日线缓存；TqSdk 页面每15秒读取最新状态。</p></form>
+<article class="panel"><div class="panel-heading"><div><h3>已保存的行情</h3><p>在线数据与演示、CSV 导入隔离；仅在线数据写入缓存。</p></div></div><div class="table-wrap"><table><thead><tr><th>标的</th><th>周期</th><th>记录数</th><th>最早日期</th><th>最新日期</th></tr></thead><tbody>{% for row in cache_rows %}<tr><td>{{ row.symbol }}</td><td>{{ row.period }}</td><td>{{ row.count }}</td><td>{{ row.first }}</td><td>{{ row.last }}</td></tr>{% else %}<tr><td colspan="5">暂无缓存。打开股指行情页或成交分布页后，TqSdk 行情自动保存。</td></tr>{% endfor %}</tbody></table></div></article>
+<article class="panel settings-notes"><h3>登录与会话</h3><p>密码以 scrypt 哈希保存。浏览器只保存 HttpOnly 会话 Cookie，不保存密码；服务端会话可撤销，退出立即失效。会话闲置 30 分钟、绝对有效期 8 小时。</p><p>修改密码：在服务所在电脑执行 <code>python -m flask --app app set-admin-password</code>，按提示输入新密码。改密后所有会话失效。</p><p>如部署到公网，请使用 HTTPS、设置 <code>MARGIN_COOKIE_SECURE=1</code> 与 <code>MARGIN_PUBLIC_ORIGIN=https://你的域名</code>，并更换初始密码。登录会话不会使 HTTP 传输变成加密连接。</p></article>
+{% endblock %}

@@ -1,0 +1,15 @@
+[workspace]
+channels = ["conda-forge"]
+name = "marginlab"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+dev = "python app.py"
+test = "python -m unittest discover -s tests -v"
+
+[dependencies]
+python = "3.11.*"
+flask = ">=3.1.3,<4"
+pandas = ">=2,<3"
+numpy = ">=1.26,<3"

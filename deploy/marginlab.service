@@ -1,0 +1,21 @@
+[Unit]
+Description=Marginlab web and market collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=marginlab
+Group=marginlab
+WorkingDirectory=/opt/marginlab
+ExecStart=/opt/marginlab/scripts/start.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

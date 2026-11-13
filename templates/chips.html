@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block scripts %}<script defer src="/static/js/chips-live.js"></script>{% endblock %}
+{% block content %}
+<div class="heading"><div><div class="eyebrow">VOLUME & PRICE</div><h1>成交量价格分布</h1><p>TqSdk 股指期货 · 按分钟收盘价归集成交量，不推断买卖方向。</p></div><span class="badge">分钟近似 · 非持仓成本</span></div>
+<form class="toolbar" id="chip-form"><label>标的<select id="chip-symbol"><option value="50">上证50 · IH</option><option value="300">沪深300 · IF</option><option value="1000">中证1000 · IM</option><option value="500">中证500 · IC</option></select></label><label>价格区间数<input id="cfgBins" type="number" min="10" max="100" value="40"></label><label>回放窗口（分钟）<input id="cfgWindow" type="number" min="20" max="1500" value="240"></label><label>均线窗口<input id="chip-ma" type="number" min="2" max="200" value="20"></label><button type="submit" class="primary" id="chip-refresh">刷新行情</button></form>
+<div class="cache-notice" role="status" id="chip-status">等待行情</div>
+<div class="toolbar"><button class="secondary" id="chip-play">播放</button><label style="flex:1">回放位置<input style="width:100%" id="chip-position" type="range" min="0" max="0" value="0"></label><span id="chip-time">—</span></div>
+<div class="grid-two"><article class="panel"><div class="panel-heading"><div><h3 id="chip-title">期货价格与均线</h3><p>颜色由浅到深表示成交时间由早到晚。</p></div></div><div class="chart tall" id="chip-price"></div></article><article class="panel"><div class="panel-heading"><div><h3>成交量分布 · 单向归集</h3><p>横轴：成交量；纵轴：价格。所有成交统一展示。</p></div></div><div class="chart tall" id="chip-profile"></div></article></div>
+<p class="footnote" id="chip-note"></p>
+{% endblock %}

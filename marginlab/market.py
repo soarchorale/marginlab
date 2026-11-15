@@ -68,8 +68,10 @@ def payload(app,args):
             endpoint = ib.timestamp+pd.Timedelta(hours=15)
         else:
             endpoint = ib.timestamp+pd.Timedelta(minutes=int(period))
-        values = {pd.Timestamp(r['timestamp']):r['value'] for r in snaps if r['quality']=='valid'}
+        values = {pd.Timestamp(r['timestamp']):r['value'] for r in snaps if r['quality'] in ('valid','reference')}
         ib['vix'] = [values.get(t,np.nan) for t in endpoint]
+        reference_times = {pd.Timestamp(r['timestamp']) for r in snaps if r['quality']=='reference'}
+        ib['vix_reference'] = [t in reference_times for t in endpoint]
         # Focus the comparison on available paired history; retain internal gaps.
         if ib.vix.notna().any():
             ib = ib.loc[ib.vix.first_valid_index():].reset_index(drop=True)
@@ -87,24 +89,24 @@ def payload(app,args):
     if product == '500':
         reason = '中证500暂无对应股指期权；只显示期货行情，不开展 MVIX 漂移研究'
     latest = dict(snaps[-1]) if snaps else None
-    valid = [r for r in snaps if r['quality']=='valid' and r['value'] is not None]
+    valid = [r for r in snaps if r['quality'] in ('valid','reference') and r['value'] is not None]
     latest_valid = dict(valid[-1]) if valid else None
     for snapshot in (latest, latest_valid):
         if snapshot:
             snapshot['details'] = json.loads(snapshot['details'])
-    mvix_history = [dict(timestamp=r['timestamp'],value=r['value'] if r['quality']=='valid' else None) for r in snaps]
+    mvix_history = [dict(timestamp=r['timestamp'],quality=r['quality'],value=r['value'] if r['quality'] in ('valid','reference') else None) for r in snaps]
     if snaps:
         from .history import boundaries
-        indexed = {r['timestamp']:r['value'] for r in mvix_history}
+        indexed = {r['timestamp']:r for r in mvix_history}
         grid = set(indexed) | {t.tz_localize(None).isoformat() for t in boundaries(snaps[0]['timestamp'],snaps[-1]['timestamp'])}
-        mvix_history = [dict(timestamp=t,value=indexed.get(t)) for t in sorted(grid)]
+        mvix_history = [indexed.get(t,dict(timestamp=t,value=None,quality='missing')) for t in sorted(grid)]
 
     return dict(source='tqsdk',product=product,period=period,status=status,cards=list(status_map.values()),
                 index_bars=records(ib.tail(1500)) if not ib.empty else [],
                 future_bars=records(fb.tail(1500)) if not fb.empty else [],
                 mvix=latest,mvix_latest_valid=latest_valid,mvix_history=mvix_history,
                 mvix_backfill=json.loads(job['payload']) if job else None,
-                mvix_cache=dict(storage='sqlite',valid_count=len(valid),total_count=len(snaps),
+                mvix_cache=dict(storage='sqlite',valid_count=len(valid),reference_count=sum(r['quality']=='reference' for r in snaps),total_count=len(snaps),
                                 first=valid[0]['timestamp'] if valid else None,
                                 latest=valid[-1]['timestamp'] if valid else None),
                 research=research,research_reason=reason,

@@ -1,4 +1,4 @@
-"""One demand-driven, read-only TqSdk loop per database, gated by live sessions."""
+"""One read-only TqSdk collector per database, autonomous by default."""
 import asyncio
 from contextlib import contextmanager
 import hashlib
@@ -276,6 +276,7 @@ class Feed:
                 return
             with session(self.app.config['TQ_AUTH_FILE']) as api:
                 self.error = None
+                boundary = (int(time.time())//60+1)*60
                 while self.active():
                     active = self.active()
                     if not self.lease():
@@ -297,7 +298,8 @@ class Feed:
                     # Copy quote state before waiting; the minute boundary must not see later updates.
                     previous = {p:self.quotes(g) for p,g in groups.items() if p in active}
                     heartbeats = {p:timestamp(g['uq'].datetime) for p,g in groups.items() if p in active}
-                    boundary = (int(time.time())//60+1)*60
+                    # Keep the pending boundary across database writes. Recomputing
+                    # it here would skip a minute when persistence crosses its end.
                     api.wait_update(deadline=min(time.time()+1,boundary))
                     now = time.time()
                     for product,g in groups.items():
@@ -314,6 +316,8 @@ class Feed:
                                 self.persist(product,g,True)
                             else:
                                 self.persist(product,g)
+                    if now >= boundary:
+                        boundary = (int(now)//60+1)*60
                     self.state = 'streaming'
         except Exception as exc:
             # Provider exceptions may contain auth payloads. Expose only class, never message.

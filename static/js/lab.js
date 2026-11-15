@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const fmt = (v,d=3) => v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toFixed(d);
+const stampLabel = value => value ? value.replace('T',' ').slice(0,19) : '时间未知';
 const NS='http://www.w3.org/2000/svg';
 let researchData=null, requestId=0, controller=null;
 let researchPending=false, renderedRequest=null, renderedPayload=null;
@@ -37,12 +38,12 @@ function chart(id,series,options={}){
  if(yr[0]<0&&yr[1]>0)add(svg,'line',{x1:pad.l,x2:w-pad.r,y1:Y(0),y2:Y(0),stroke:'#ced8dc'});
  series.forEach((s,j)=>{
   if(s.gradient){for(let i=1;i<s.data.length;i++){const a=s.data[i-1],b=s.data[i];if(a[1]==null||b[1]==null)continue;add(svg,'line',{x1:X(a[0]),y1:Y(a[1]),x2:X(b[0]),y2:Y(b[1]),stroke:`hsl(169 37% ${80-i/s.data.length*51}%)`,'stroke-width':1.5});}}
-  else {let path='',gap=true;s.data.forEach(d=>{if(d[1]==null||!Number.isFinite(d[1])){gap=true;return;}path+=`${gap?'M':'L'}${X(d[0]).toFixed(2)},${Y(d[1],s.right).toFixed(2)} `;gap=false;});add(svg,'path',{d:path,fill:'none',stroke:s.color||colors[j%4],'stroke-width':s.dash?1:1.8,'stroke-dasharray':s.dash?'5 4':'none'});}
-  if(s.points)s.data.filter(d=>d[1]!=null).forEach(d=>add(svg,'circle',{cx:X(d[0]),cy:Y(d[1],s.right),r:3.6,fill:s.color||colors[j%4],stroke:'#fff','stroke-width':1.5}));
+  else {let path='',gap=true;s.data.forEach(d=>{if(d[1]==null||!Number.isFinite(d[1])){gap=true;return;}path+=`${gap?'M':'L'}${X(d[0]).toFixed(2)},${Y(d[1],s.right).toFixed(2)} `;gap=false;});add(svg,'path',{d:path,fill:'none',stroke:s.color||colors[j%4],'stroke-width':s.width||(s.dash?1:1.8),'stroke-linejoin':'round','stroke-linecap':'round','stroke-dasharray':s.dash?'5 4':'none'});}
+  if(s.points)s.data.filter((d,i)=>d[1]!=null&&Number.isFinite(d[1])&&(s.points!=='isolated'||((i===0||s.data[i-1][1]==null)&&(i===s.data.length-1||s.data[i+1][1]==null)))).forEach(d=>add(svg,'circle',{cx:X(d[0]),cy:Y(d[1],s.right),r:s.points==='isolated'?2.5:3.6,fill:s.color||colors[j%4],stroke:s.points==='isolated'?'none':'#fff','stroke-width':s.points==='isolated'?0:1.5}));
  });
  if(options.legend)options.legend.forEach((name,i)=>add(svg,'text',{x:pad.l+i*130,y:12,style:`fill:${colors[i]}`},'● '+name));
  const line=add(svg,'line',{x1:0,x2:0,y1:pad.t,y2:h-pad.b,stroke:'#93ada6','stroke-dasharray':'3 3',visibility:'hidden'});
- svg.addEventListener('pointermove',e=>{const rect=svg.getBoundingClientRect();const px=(e.clientX-rect.left)*w/rect.width;const val=xr[0]+(px-pad.l)/pw*(xr[1]-xr[0]);let nearest=valid.reduce((a,b)=>Math.abs(a[0]-val)<Math.abs(b[0]-val)?a:b);line.setAttribute('x1',X(nearest[0]));line.setAttribute('x2',X(nearest[0]));line.setAttribute('visibility','visible');const tip=$('chart-tooltip');tip.textContent=options.tooltip?options.tooltip(nearest[0],nearest):series.filter(s=>s.data.length).map(s=>{const d=s.data.reduce((a,b)=>Math.abs(a[0]-val)<Math.abs(b[0]-val)?a:b);return s.name+': '+fmt(d[1]);}).join('\n');tip.hidden=false;tip.style.left=Math.max(8,Math.min(e.clientX+15,window.innerWidth-230))+'px';tip.style.top=Math.max(8,Math.min(e.clientY+15,window.innerHeight-130))+'px';});
+ svg.addEventListener('pointermove',e=>{const rect=svg.getBoundingClientRect();const px=(e.clientX-rect.left)*w/rect.width;const val=xr[0]+(px-pad.l)/pw*(xr[1]-xr[0]);const distance=d=>options.band?Math.hypot(X(d[0])-px,Y(d[1])-(e.clientY-rect.top)*h/rect.height):Math.abs(d[0]-val);let nearest=valid.reduce((a,b)=>distance(a)<distance(b)?a:b);line.setAttribute('x1',X(nearest[0]));line.setAttribute('x2',X(nearest[0]));line.setAttribute('visibility','visible');const tip=$('chart-tooltip');tip.textContent=options.tooltip?options.tooltip(nearest[0],nearest):(options.timeLabel?options.timeLabel(nearest[0])+'\n':'')+series.filter(s=>s.data.length).map(s=>{const d=s.data.find(d=>d[0]===nearest[0]);return s.name+': '+fmt(d?.[1]);}).join('\n');tip.hidden=false;tip.style.left=Math.max(8,Math.min(e.clientX+15,window.innerWidth-230))+'px';tip.style.top=Math.max(8,Math.min(e.clientY+15,window.innerHeight-130))+'px';});
  svg.addEventListener('pointerleave',()=>{line.setAttribute('visibility','hidden');$('chart-tooltip').hidden=true;});
 }
 function td(row,value,className=''){const cell=document.createElement('td');cell.textContent=value??'—';cell.className=className;row.append(cell);}
@@ -54,9 +55,9 @@ function renderResearch(){
  $('source-badge').textContent=d.meta.source==='demo'?'演示数据 · 非实盘':d.meta.source==='csv'?'CSV 导入 · 用户数据':'TqSdk · 分钟行情';$('data-range').textContent=b[0].timestamp.slice(0,10)+' — '+last.timestamp.slice(0,10)+' / '+b.length+' 根';
  const s=(key,name,color,mult=1)=>({name,color,data:b.map((r,i)=>[i,r[key]==null?null:r[key]*mult])});
  const dateLabel=x=>b[Math.max(0,Math.min(b.length-1,Math.round(x)))]?.timestamp.replace('T',' ').slice(5,d.meta.period==='daily'?10:16);
- const opts={xLabel:dateLabel,xRange:[0,b.length-1]};
- chart('market-chart',[s('close','标的',colors[0]),{...s('vix','MVIX',colors[1]),right:true,points:true}],{...opts,dual:true,decimals:3,tooltip:x=>{const r=b[Math.round(x)];return r.timestamp.replace('T',' ').slice(0,16)+'\n标的 '+fmt(r.close)+'\nMVIX '+fmt(r.vix,2);}});
- chart('phase-chart',[{name:'轨迹',gradient:true,data:b.map(r=>[r.close,r.vix])},{name:'独立回访',points:true,color:'#213e3a',data:visits.map(r=>[r.price,r.vix])}],{band:[d.anchor.low,d.anchor.high],tooltip:(x,n)=>'标的 '+fmt(x,4)+'\nMVIX '+fmt(n[1],2)});
+ const opts={xLabel:dateLabel,timeLabel:x=>stampLabel(b[Math.round(x)]?.timestamp),xRange:[0,b.length-1]};
+ chart('market-chart',[s('close','标的',colors[0]),{...s('vix','MVIX','#bb6929'),right:true,points:'isolated',width:2.2}],{...opts,dual:true,decimals:3,tooltip:x=>{const r=b[Math.round(x)];return stampLabel(r.timestamp)+'\n标的 '+fmt(r.close)+'\nMVIX '+fmt(r.vix,2)+(r.vix_reference?'（Excel 参考估算）':'');}});
+ chart('phase-chart',[{name:'轨迹',gradient:true,data:b.map(r=>[r.close,r.vix,r.timestamp])},{name:'独立回访',points:true,color:'#213e3a',data:visits.map(r=>[r.price,r.vix,r.timestamp])}],{band:[d.anchor.low,d.anchor.high],tooltip:(x,n)=>stampLabel(n[2])+'\n标的 '+fmt(x,4)+'\nMVIX '+fmt(n[1],2)});
  chart('residual-chart',[s('accumulated','累计残差',colors[0],100),{...s('upper','历史 95%',colors[1],100),dash:true},{...s('lower','历史 5%',colors[2],100),dash:true}],opts);
  chart('correlation-chart',[s('corr_return','涨跌幅',colors[0]),s('corr_level','价格水平',colors[1])],{...opts,yRange:[-1,1],legend:['涨跌幅相关性','价格水平相关性']});
  chart('hv-chart',[s('hv','历史波动率',colors[0]),s('vix','MVIX',colors[1])],{...opts,legend:['历史波动率 %','MVIX 指数点']});
@@ -118,7 +119,10 @@ function candleChart(id,bars){
  const b=bars.slice(-160),lo=Math.min(...b.map(x=>x.low)),hi=Math.max(...b.map(x=>x.high)),range=hi-lo||1;
  const X=i=>48+i*(w-68)/b.length,Y=p=>20+(hi-p)/range*(h-50),bw=Math.max(1,(w-68)/b.length*.65);
  for(let i=0;i<5;i++){const price=lo+range*i/4;add(svg,'text',{x:4,y:Y(price)+3},fmt(price,1));add(svg,'line',{x1:45,x2:w-10,y1:Y(price),y2:Y(price),stroke:'#edf0f2'});}
- b.forEach((r,i)=>{const color=r.close>=r.open?'#d48e50':'#198c80';add(svg,'line',{x1:X(i),x2:X(i),y1:Y(r.high),y2:Y(r.low),stroke:color});const body=add(svg,'rect',{x:X(i)-bw/2,y:Math.min(Y(r.open),Y(r.close)),width:bw,height:Math.max(1,Math.abs(Y(r.open)-Y(r.close))),fill:color});body.append(el('title',{},`${r.timestamp}\n开 ${r.open} 高 ${r.high} 低 ${r.low} 收 ${r.close}\n成交量 ${r.volume}`));});
+ b.forEach((r,i)=>{const color=r.close>=r.open?'#d48e50':'#198c80';add(svg,'line',{x1:X(i),x2:X(i),y1:Y(r.high),y2:Y(r.low),stroke:color});const body=add(svg,'rect',{x:X(i)-bw/2,y:Math.min(Y(r.open),Y(r.close)),width:bw,height:Math.max(1,Math.abs(Y(r.open)-Y(r.close))),fill:color});});
+ const cursor=add(svg,'line',{y1:20,y2:h-30,stroke:'#93ada6','stroke-dasharray':'3 3',visibility:'hidden'});
+ svg.addEventListener('pointermove',e=>{const rect=svg.getBoundingClientRect(),px=(e.clientX-rect.left)*w/rect.width,i=Math.max(0,Math.min(b.length-1,Math.round((px-48)*b.length/(w-68)))),r=b[i];cursor.setAttribute('x1',X(i));cursor.setAttribute('x2',X(i));cursor.setAttribute('visibility','visible');const tip=$('chart-tooltip');tip.textContent=stampLabel(r.timestamp)+'\n开盘 '+fmt(r.open)+'\n最高 '+fmt(r.high)+'\n最低 '+fmt(r.low)+'\n收盘 '+fmt(r.close)+'\n成交量 '+fmt(r.volume,0)+'\n持仓量 '+fmt(r.close_oi,0);tip.hidden=false;tip.style.left=Math.max(8,Math.min(e.clientX+15,window.innerWidth-230))+'px';tip.style.top=Math.max(8,Math.min(e.clientY+15,window.innerHeight-230))+'px';});
+ svg.addEventListener('pointerleave',()=>{cursor.setAttribute('visibility','hidden');$('chart-tooltip').hidden=true;});
  add(svg,'text',{x:48,y:h-8},b[0].timestamp.replace('T',' ').slice(5,16));add(svg,'text',{x:w-10,y:h-8,'text-anchor':'end'},b.at(-1).timestamp.replace('T',' ').slice(5,16));
 }
 function renderTq(d){
@@ -128,20 +132,21 @@ function renderTq(d){
  const status=d.status;$('future-title').textContent=(status.name||'股指期货')+' · '+(status.contract||'正在解析主力');
  $('tq-status').textContent=(d.collector.error||({'connecting':'正在连接并订阅行情，首次加载可能需要数十秒','streaming':'行情订阅已连接','scheduled':'自动采集已启用，等待工作日 09:20–15:10','idle':'行情采集待启动','shared':'其他进程正在采集行情'}[d.collector.state]||d.collector.state))+'。最新行情：'+(status.quote_time||'尚无')+'。历史保留 '+d.cache.retention_months+' 个月；'+(d.collector.automatic?'后台自动采集四组行情，不依赖页面打开或登录。':'按页面需求采集，关闭页面后停止续订。');
  candleChart('future-chart',d.future_bars);
- const f=d.future_bars;chart('oi-chart',[{name:'成交量',data:f.map((r,i)=>[i,r.volume])},{name:'持仓量',right:true,data:f.map((r,i)=>[i,r.close_oi])}],{dual:true,xLabel:i=>f[Math.round(i)]?.timestamp.slice(11,16)||''});
+ const f=d.future_bars;chart('oi-chart',[{name:'成交量',data:f.map((r,i)=>[i,r.volume])},{name:'持仓量',right:true,data:f.map((r,i)=>[i,r.close_oi])}],{dual:true,xLabel:i=>f[Math.round(i)]?.timestamp.replace('T',' ').slice(5,16)||'',timeLabel:i=>stampLabel(f[Math.round(i)]?.timestamp)});
  const m=d.mvix,valid=d.mvix_latest_valid??(m?.quality==='valid'?m:null),cache=d.mvix_cache;
  const mvixCaption=valid?`SQLite · ${valid.timestamp.replace('T',' ')} · ${cache?.valid_count??1} 个有效快照`:'所选区间暂无有效快照';
  $('mvix-history-panel').hidden=false;
  $('mvix-history-note').textContent=mvixCaption+(cache?.valid_count===1?'。目前只有一个点，尚不能形成历史曲线或漂移信号。':'。缺失报价保留为空，不跨缺口连接。');
+ if(cache?.reference_count)$('mvix-history-note').textContent+=' 含 '+cache.reference_count+' 个 Excel 收盘价代中间价的参考估算点。';
  if(d.mvix_backfill?.limitation)$('mvix-history-note').textContent+=' '+d.mvix_backfill.limitation+'。';
  const history=d.mvix_history||[];
- chart('mvix-history-chart',[{name:'MVIX',color:colors[1],points:true,data:history.map((r,i)=>[i,r.value])}],{xLabel:i=>history[Math.round(i)]?.timestamp.replace('T',' ').slice(5,16)||'',tooltip:i=>{const r=history[Math.round(i)];return r?r.timestamp.replace('T',' ')+'\nMVIX '+fmt(r.value,2):'';}});
+ chart('mvix-history-chart',[{name:'MVIX',color:'#bb6929',points:'isolated',width:2.2,data:history.map((r,i)=>[i,r.value])}],{xLabel:i=>history[Math.round(i)]?.timestamp.replace('T',' ').slice(5,16)||'',tooltip:i=>{const r=history[Math.round(i)];return r?r.timestamp.replace('T',' ')+'\nMVIX '+fmt(r.value,2)+(r.quality==='reference'?'（Excel 参考估算）':''):'';}});
 
- $('tq-quality').textContent=(d.research_reason||'MVIX 漂移基于对应现货指数；期货换月不进入研究序列。')+' '+(m?'最近 MVIX 快照 '+m.timestamp+' · '+(m.quality==='valid'?'有效，利率为配置假设':m.details.reason||'报价不足'):'暂无 MVIX 快照；不使用成交价代替中间价。')+' '+d.cache.history_note;
- if(d.research){researchData=d.research;renderResearch();$('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(m?.quality!=='valid'?' · 最近采样无效，显示历史值':'');$('export').disabled=false;return;}
+ $('tq-quality').textContent=(d.research_reason||'MVIX 漂移基于对应现货指数；期货换月不进入研究序列。')+' '+(m?'最近 MVIX 快照 '+m.timestamp+' · '+(m.quality==='reference'?'Excel 参考估算':m.quality==='valid'?'有效，利率为配置假设':m.details.reason||'报价不足'):'暂无 MVIX 快照；不使用成交价代替中间价。')+' '+d.cache.history_note;
+ if(d.research){researchData=d.research;renderResearch();$('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(!['valid','reference'].includes(m?.quality)?' · 最近采样无效，显示历史值':'');$('export').disabled=false;return;}
  researchData=null;$('cache-status').hidden=true;const ib=d.index_bars,last=ib.at(-1);
- $('metric-price').textContent=fmt(last?.close,1);$('symbol-mini').textContent=d.product+' 指数';$('metric-date').textContent=last?.timestamp.replace('T',' ')||'等待行情';$('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(valid&&m?.quality!=='valid'?' · 最近采样无效，显示历史值':'');$('metric-corr').textContent='—';$('level-corr').textContent='等待同期 MVIX 历史';$('metric-drift').textContent='—';$('metric-state').textContent='样本积累中';
- chart('market-chart',[{name:'指数',data:ib.map((r,i)=>[i,r.close])},{name:'MVIX',right:true,points:true,data:ib.map((r,i)=>[i,r.vix])}],{dual:true,xLabel:i=>ib[Math.round(i)]?.timestamp.slice(11,16)||''});
+ $('metric-price').textContent=fmt(last?.close,1);$('symbol-mini').textContent=d.product+' 指数';$('metric-date').textContent=last?.timestamp.replace('T',' ')||'等待行情';$('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(valid&&!['valid','reference'].includes(m?.quality)?' · 最近采样无效，显示历史值':'');$('metric-corr').textContent='—';$('level-corr').textContent='等待同期 MVIX 历史';$('metric-drift').textContent='—';$('metric-state').textContent='样本积累中';
+ chart('market-chart',[{name:'指数',data:ib.map((r,i)=>[i,r.close])},{name:'MVIX',color:'#bb6929',right:true,points:'isolated',width:2.2,data:ib.map((r,i)=>[i,r.vix])}],{dual:true,xLabel:i=>ib[Math.round(i)]?.timestamp.replace('T',' ').slice(5,16)||'',timeLabel:i=>stampLabel(ib[Math.round(i)]?.timestamp)});
  ['phase-chart','residual-chart','correlation-chart','visits-chart','hv-chart','sensitivity-chart'].forEach(id=>{$(id).replaceChildren();$(id).textContent='MVIX 有效样本不足，暂不生成漂移信号';});
  $('visits-body').replaceChildren();$('visit-count').textContent='0 次回访';$('data-range').textContent=ib.length+' 根指数行情 / '+d.period+' 分钟';
 }

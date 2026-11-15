@@ -150,8 +150,30 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(data['mvix']['quality'],'insufficient')
         self.assertEqual(data['mvix_cache']['valid_count'],1)
         self.assertEqual(data['mvix_history'],[
-            {'timestamp':date+'T10:01:00','value':17.52},
-            {'timestamp':date+'T10:02:00','value':None}])
+            {'timestamp':date+'T10:01:00','value':17.52,'quality':'valid'},
+            {'timestamp':date+'T10:02:00','value':None,'quality':'insufficient'}])
+
+    def test_reference_snapshot_is_visible_and_identified(self):
+        login(self.c)
+        date=pd.Timestamp.now(tz='Asia/Shanghai').date().isoformat()
+        save_snapshot(self.app.config['DATABASE'],'50',date+'T10:01:00',
+                      {'value':18.2,'quality':'reference','source':'excel_close_as_reference_mid'},[])
+        with patch.object(self.feed,'touch'):
+            data=self.c.post('/api/research',json={'source':'live','symbol':'50','period':'1'}).json
+        self.assertEqual(data['mvix_history'][0]['quality'],'reference')
+        self.assertEqual(data['mvix_history'][0]['value'],18.2)
+        self.assertEqual(data['mvix_cache']['reference_count'],1)
+
+    def test_live_quote_adapter_uses_bid_ask_not_last_price(self):
+        from types import SimpleNamespace
+        quote=SimpleNamespace(instrument_id='test',strike_price=100,option_class='CALL',
+            expire_datetime=1900000000,bid_price1=4,ask_price1=6,bid_volume1=1,
+            ask_volume1=1,datetime='2026-11-16 10:00:00',last_price=999)
+        rows=self.feed.quotes({'options':[quote]})
+        self.assertEqual((rows[0]['bid']+rows[0]['ask'])/2,5)
+        self.assertNotIn('last_price',rows[0])
+        quote.bid_price1=float('nan')
+        self.assertIsNone(self.feed.quotes({'options':[quote]})[0]['bid'])
 
     def test_chips_unknown_direction_and_old_sources_disabled(self):
         login(self.c)

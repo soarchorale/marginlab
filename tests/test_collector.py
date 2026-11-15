@@ -49,6 +49,41 @@ class CollectorTests(unittest.TestCase):
             thread.return_value.is_alive.return_value=True
             self.feed.maintain();thread.return_value.start.assert_called_once()
 
+    def test_database_work_crossing_boundary_does_not_skip_snapshot(self):
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        import pandas as pd
+        start=pd.Timestamp('2026-11-16 09:30:58',tz='Asia/Shanghai').timestamp()
+        clock=[start]; waits=[0]
+        uq=SimpleNamespace(datetime='2026-11-16 09:30:58')
+        frame=pd.DataFrame({'datetime':[1,2]})
+        group=dict(uq=uq,trade_day='2026-11-16',ib=frame,fb=frame,last_minute=0,
+                   last_save=0,main=SimpleNamespace(underlying_symbol='test'),
+                   fq=SimpleNamespace(instrument_id='test'))
+        class API:
+            def wait_update(self,deadline):
+                waits[0]+=1
+                if waits[0]==1:
+                    clock[0]=start+1
+                    uq.datetime='2026-11-16 09:30:59'
+        @contextmanager
+        def fake_session(path):
+            yield API()
+        def persist(product,g,initial=False):
+            if not initial:
+                clock[0]=start+3
+                g['last_save']=clock[0]
+        with patch('marginlab.tqfeed.time.time',side_effect=lambda:clock[0]), \
+             patch('marginlab.tqfeed.session',fake_session), \
+             patch.object(self.feed,'active',side_effect=lambda:{'50'} if waits[0]<3 else set()), \
+             patch.object(self.feed,'lease',return_value=True), \
+             patch.object(self.feed,'group',return_value=group), \
+             patch.object(self.feed,'persist',side_effect=persist), \
+             patch.object(self.feed,'quotes',return_value=[]), \
+             patch.object(self.feed,'snapshot') as snapshot:
+            self.feed.run()
+        snapshot.assert_called_once_with('50',[],start+2,market_epoch=start+1)
+
     def test_local_history_can_exceed_sdk_serial_limit(self):
         path=self.app.config['DATABASE']
         with connect(path) as db:

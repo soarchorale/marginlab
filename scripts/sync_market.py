@@ -44,7 +44,7 @@ def import_market(database,source,backup):
         manifest=json.loads(src.execute('SELECT payload FROM export_manifest').fetchone()[0])
         for table in TABLES:
             if src.execute('SELECT count(*) FROM '+table).fetchone()[0]!=manifest['counts'][table]:raise ValueError('Snapshot count mismatch')
-    with sqlite3.connect(database,timeout=30) as dst:
+    with sqlite3.connect(database.as_uri()+'?mode=rw',uri=True,timeout=30) as dst:
         active=dst.execute('SELECT expires FROM tq_lease WHERE id=1').fetchone()
         import time
         if active and active[0]>time.time():raise RuntimeError('Stop the local collector before importing')

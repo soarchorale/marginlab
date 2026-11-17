@@ -2,6 +2,12 @@
 
 The local project root is `/path/to/marginlab`. Resolve runtime paths from `__file__` or explicit CLI arguments, not from the caller working directory. Keep documentation, source comments, docstrings, CLI prompts, and application-owned logs in English. Preserve Chinese browser copy, UI state labels, and upstream field names required by provider schemas. Do not rewrite private historical databases or third-party source files merely to translate text.
 
+## November 17 current iteration
+
+Date inputs remain visible beside the top-level research selectors. Analysis parameter controls live beside their charts but share `research-form`. There is no collection/coverage panel: background health and audits log through `marginlab/logging_setup.py` into daily Shanghai-date JSON files, default retention 30 days. Preserve the local read-only replica policy.
+
+`deploy/release.py --build-only` runs isolated tests and packages current files, including uncommitted work. A release with `--host` performs an actual SSH/nohup upgrade and requires explicit user release authorization. It preserves remote runtime data, snapshots the database, and restores code on failed startup. Never automatically restore an older database during rollback. Production uses single-process Waitress; `scripts/serve.py` accepts HOST/PORT and loads server.json when present, otherwise existing environment configuration.
+
 ## Release authorization (2026-11-14)
 
 Develop, debug, and validate changes locally first. Deploy to the remote service only after the user explicitly confirms that release. Prior deployment authorization does not authorize subsequent releases. Read-only production inspection is separate from deployment; preserve production market history and credentials.

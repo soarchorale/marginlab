@@ -27,12 +27,15 @@ def create_app(config=None):
     app.config.update(MAX_CONTENT_LENGTH=4*1024*1024)
     app.config.update(
         DATABASE=os.environ.get('MARGIN_DATABASE', str(ROOT/'instance'/'margin.sqlite3')),
-        HISTORY_MONTHS=int(os.environ.get('MARGIN_HISTORY_MONTHS', '3')),
+        LOG_DIR=os.environ.get('MARGIN_LOG_DIR'),
+        LOG_RETENTION_DAYS=int(os.environ.get('MARGIN_LOG_RETENTION_DAYS','30')),
+        HISTORY_MONTHS=int(os.environ.get('MARGIN_HISTORY_MONTHS', '1')),
         MARKET_REFRESH_SECONDS=900, MARKET_RETRY_SECONDS=60, MARKET_TIMEOUT=20,
         AUTH_IDLE_TIMEOUT=1800, AUTH_MAX_AGE=28800,
         COOKIE_SECURE=os.environ.get('MARGIN_COOKIE_SECURE', '0') == '1',
         PUBLIC_ORIGIN=os.environ.get('MARGIN_PUBLIC_ORIGIN'),
         TQ_AUTH_FILE=os.environ.get('TQ_AUTH_FILE',str(ROOT/'tqauth.json')),
+        MARKET_READ_ONLY=os.environ.get('MARGIN_MARKET_READ_ONLY','0')=='1',
         TQ_QUOTE_MAX_AGE=600, MVIX_RATE=float(os.environ.get('MVIX_RATE','0.02')),
     )
     if config:
@@ -41,6 +44,8 @@ def create_app(config=None):
         raise ValueError('MVIX_RATE must be finite and between -0.1 and 0.5')
     if not 1 <= app.config['HISTORY_MONTHS'] <= 36:
         raise ValueError('HISTORY_MONTHS must be between 1 and 36')
+    from .logging_setup import configure
+    configure(app)
     from .storage import initialize
     from .auth import install_auth
     from .cache import prune
@@ -50,6 +55,10 @@ def create_app(config=None):
     tqstore.initialize(app.config['DATABASE'])
     from .history import initialize as initialize_history
     initialize_history(app.config['DATABASE'])
+    from .runtime import initialize as initialize_runtime
+    from .analysis_cache import AnalysisCache
+    initialize_runtime(app.config['DATABASE'])
+    app.extensions['analysis_cache']=AnalysisCache()
     app.extensions['tq_feed'] = Feed(app)
     install_auth(app)
     prune(app)
@@ -68,7 +77,8 @@ def create_app(config=None):
 
     @app.get('/')
     def index():
-        return render_template('index.html', page='research', page_title='波动率研究', history_cutoff=prune(app))
+        from .cache import cutoff_for,settings
+        return render_template('index.html', page='research', page_title='波动率研究', history_cutoff=cutoff_for(settings(app)['months']))
 
     @app.get('/pricing')
     def pricing_page():
@@ -84,11 +94,11 @@ def create_app(config=None):
         from .storage import connect
         from flask import redirect
         if request.method == 'POST':
-            months = number(request.form, 'history_months', 3, 1, 36, True)
+            months = number(request.form, 'history_months', 1, 1, 36, True)
             refresh = number(request.form, 'refresh_seconds', 900, 60, 86400, True)
             with connect(app.config['DATABASE']) as db:
                 db.executemany('INSERT OR REPLACE INTO settings VALUES(?,?)', [('history_months',str(months)),('refresh_seconds',str(refresh))])
-            prune(app)
+            app.extensions['tq_feed'].last_prune=0
             return redirect('/settings?saved=1')
         return render_template('settings.html', page='settings', page_title='管理员设置', settings=settings(app), cache_rows=cache_summary(app), saved=request.args.get('saved')=='1')
 

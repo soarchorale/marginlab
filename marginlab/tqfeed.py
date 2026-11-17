@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from .storage import connect
 from . import tqstore
-from .mvix import calculate
+from .mvix import calculate, METHOD
 
 PRODUCTS = {
  '50':dict(name='上证50',index='SSE.000016',future='KQ.m@CFFEX.IH',option='HO'),
@@ -74,10 +74,17 @@ class Feed:
         self.owner = uuid.uuid4().hex
         self.state = 'idle'
         self.error = None
+        with connect(self.path) as db:
+            setting=db.execute("SELECT value FROM settings WHERE key='market_read_only'").fetchone()
+        self.read_only=app.config.get('MARKET_READ_ONLY',False) or bool(setting and setting[0]=='1')
         self.autonomous = False
         self.stop_event = threading.Event()
         self.supervisor = None
         self.last_prune = 0
+        from .coverage import Maintenance
+        self.maintenance=Maintenance(app)
+        self.progress_lock=threading.Lock();self.progress={}
+        self.loop_at=0;self.worker_started_at=0;self.failures=0;self.last_health=0
 
     @staticmethod
     def collection_window(now=None):
@@ -101,6 +108,9 @@ class Feed:
         if time.time()-self.last_prune >= 3600:
             prune(self.app)
             self.last_prune = time.time()
+        if self.read_only:
+            self.state = 'replica'
+            return
         with self.lock:
             if self.thread and self.thread.is_alive():
                 return
@@ -108,6 +118,7 @@ class Feed:
                 self.state = 'scheduled'
             elif time.time() >= self.retry:
                 self.state = 'connecting'
+                self.worker_started_at=time.time()
                 self.thread = threading.Thread(target=self.run,daemon=True,name='margin-tqsdk')
                 self.thread.start()
 
@@ -115,7 +126,13 @@ class Feed:
         while not self.stop_event.is_set():
             try:
                 self.maintain()
+                if time.time()-self.last_health>=15:
+                    from .health import publish
+                    publish(self);self.last_health=time.time()
+                self.maintenance.tick()
             except Exception as exc:
+                from .logging_setup import event
+                event('collector_scheduling_failed',40,error_type=type(exc).__name__)
                 self.error = 'Collector scheduling failed ('+type(exc).__name__+')'
                 self.state = 'error'
             self.stop_event.wait(5)
@@ -124,17 +141,19 @@ class Feed:
         self.stop_event.set()
 
     def touch(self,product,token_hash):
+        if self.read_only:return
         if self.autonomous:
             return  # Web requests read SQLite; the supervisor owns subscriptions.
         with self.lock:
             self.demands[(product,token_hash)] = time.time()+90
             if (not self.thread or not self.thread.is_alive()) and time.time() >= self.retry:
                 self.state = 'connecting'
+                self.worker_started_at=time.time()
                 self.thread = threading.Thread(target=self.run,daemon=True,name='margin-tqsdk')
                 self.thread.start()
 
     def active(self):
-        if self.stop_event.is_set():
+        if self.read_only or self.stop_event.is_set():
             return set()
         if self.autonomous:
             return set(PRODUCTS) if self.collection_window() else set()
@@ -206,11 +225,11 @@ class Feed:
         # A fresh index heartbeat confirms the subscription is still receiving
         # market data. An option quote may remain unchanged for longer than 10m.
         healthy = market_epoch is not None and 0 <= at-market_epoch <= 10
-        if market_epoch is not None and not healthy:
-            # Weekday scheduling is an upper bound, not an exchange calendar.
-            # No fresh market heartbeat => no holiday/disconnected pseudo-minute.
-            return
+        # Keep raw evidence even if the index heartbeat is stale. Such evidence
+        # is not eligible for automatic historical reconstruction.
+        auction=897 < minute <= 900
         eligible = []
+        evidence_groups = {}
         invalid = 0
         for row in rows:
             r = dict(row)
@@ -223,20 +242,31 @@ class Feed:
                 r['bid'],r['ask'] = None,None
                 invalid += 1
             eligible.append(r)
+            if row['quote_epoch'] and row['quote_epoch'] <= at:
+                source = ('tqsdk_live_auction_evidence' if auction else
+                          'tqsdk_live_unverified_evidence' if invalid_time else 'tqsdk_live_minute_asof')
+                evidence_groups.setdefault(source, []).append(dict(row, timestamp=iso(at), quote_ns=int(row['quote_epoch']*1e9)))
         try:
+            if auction:
+                raise ValueError('Closing auction: record quotes only; display may carry the 14:57 value')
+            if market_epoch is not None and not healthy:
+                raise ValueError('Stale index heartbeat; quotes retained as unverified evidence')
+            if invalid:
+                raise ValueError('Unverified quote timestamps; null-strike exclusion is not a time-validity fallback')
             result = calculate(eligible,at,self.app.config['MVIX_RATE'])
             result['quality'] = 'valid'
         except (ValueError,TypeError,KeyError,OverflowError) as exc:
-            result = dict(value=None,quality='insufficient',reason=str(exc))
-        result.update(quote_count=len(rows),unusable_timestamps=invalid,max_quote_age_seconds=None if healthy else age,
+            result = dict(value=None,quality='auction' if auction else 'insufficient',reason=str(exc))
+        result.update(method=METHOD,rate=self.app.config['MVIX_RATE'],quote_count=len(rows),unusable_timestamps=invalid,max_quote_age_seconds=None if healthy else age,
                       market_heartbeat_epoch=market_epoch,unchanged_quotes_allowed=healthy,
-                      boundary=iso(at),sampling='last-known-before-boundary')
+                      boundary=iso(at),sampling='last-known-before-boundary',phase='closing_auction' if auction else 'continuous',evidence_verified=healthy or market_epoch is None)
         if product in self.active():
             from .history import store_minutes
-            evidence = [dict(r,timestamp=iso(at),quote_ns=int(r['quote_epoch']*1e9))
-                        for r in eligible if r['quote_epoch'] and r['quote_epoch'] <= at]
-            store_minutes(self.path,product,evidence,source='tqsdk_live_minute_asof')
-            tqstore.save_snapshot(self.path,product,iso(at),result,eligible)
+            for source, evidence in evidence_groups.items():
+                store_minutes(self.path,product,evidence,source=source)
+            # Continuous snapshots retain the exact calculation inputs; raw
+            # unmasked evidence remains in the option-minute table.
+            tqstore.save_snapshot(self.path,product,iso(at),result,rows if auction else eligible)
 
     def persist(self,product,group,initial=False):
         if product not in self.active():
@@ -255,7 +285,7 @@ class Feed:
             frame = frame[(frame.low > 0) & (frame.low <= frame[['open','close']].min(axis=1)) &
                           (frame.high >= frame[['open','close']].max(axis=1)) & (frame.volume >= 0)]
             if not frame.empty:
-                tqstore.save_bars(self.path,quote.instrument_id,frame if initial else frame.tail(10),cutoff)
+                tqstore.save_bars(self.path,quote.instrument_id,frame if initial or now-group.get('last_save',0)>90 else frame.tail(10),cutoff)
         fq,uq = group['fq'],group['uq']
         status = dict(product=product,**PRODUCTS[product],contract=fq.instrument_id,
                       index_price=finite(uq.last_price),future_price=finite(fq.last_price),
@@ -278,6 +308,7 @@ class Feed:
                 self.error = None
                 boundary = (int(time.time())//60+1)*60
                 while self.active():
+                    self.loop_at=time.time()
                     active = self.active()
                     if not self.lease():
                         break
@@ -302,9 +333,15 @@ class Feed:
                     # it here would skip a minute when persistence crosses its end.
                     api.wait_update(deadline=min(time.time()+1,boundary))
                     now = time.time()
+                    self.loop_at=now
                     for product,g in groups.items():
                         if product not in self.active():
                             continue
+                        epochs=[timestamp(g['uq'].datetime),timestamp(getattr(g['fq'],'datetime',''))]+[timestamp(q.datetime) for q in g.get('options',[])]
+                        epoch=max(epochs)
+                        with self.progress_lock:
+                            previous_epoch=self.progress.get(product,{}).get('market_epoch')
+                            if epoch!=previous_epoch:self.progress[product]=dict(market_epoch=epoch,received_at=now)
                         if now >= boundary and g['last_minute'] < boundary:
                             if PRODUCTS[product]['option']:
                                 self.snapshot(product,previous[product],boundary,market_epoch=heartbeats[product])
@@ -319,8 +356,12 @@ class Feed:
                     if now >= boundary:
                         boundary = (int(now)//60+1)*60
                     self.state = 'streaming'
+                    self.failures=0
         except Exception as exc:
             # Provider exceptions may contain auth payloads. Expose only class, never message.
+            from .logging_setup import event
+            event('collector_connection_failed',40,error_type=type(exc).__name__,retry_seconds=60)
+            self.failures+=1
             self.error = 'TqSdk connection or subscription failed ('+type(exc).__name__+'); check credentials, permissions, and connectivity before retrying'
             self.state = 'error'
             self.retry = time.time()+60

@@ -99,6 +99,33 @@ class MigrationTests(unittest.TestCase):
         with connect(self.app.config['DATABASE']) as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM tq_snapshots').fetchone()[0],1)
 
+    def test_selected_range_is_not_capped_or_trimmed_to_first_mvix(self):
+        days=pd.bdate_range(end=pd.Timestamp.now().normalize(),periods=7)
+        times=[day+pd.Timedelta(minutes=m) for day in days for m in list(range(570,690))+list(range(780,900))]
+        with connect(self.app.config['DATABASE']) as db:
+            db.execute('INSERT INTO tq_status VALUES(?,?)',('50',json.dumps({'contract':'CFFEX.IHtest'})))
+            db.executemany('INSERT INTO tq_bars VALUES(?,?,?,?,?,?,?,?,?)',
+                [(symbol,t.isoformat(),100,102,99,101,1,2,2) for symbol in ['SSE.000016','CFFEX.IHtest'] for t in times])
+        for t in times[-40:]:
+            save_snapshot(self.app.config['DATABASE'],'50',(t+pd.Timedelta(minutes=1)).isoformat(),{'quality':'valid','value':20},[])
+        login(self.c)
+        args={'source':'live','symbol':'50','period':'1','start':str(days[0].date()),'end':str(days[-1].date())}
+        with patch.object(self.feed,'touch'):
+            response=self.c.post('/api/research',json=args)
+        self.assertEqual(response.status_code,200)
+        data=response.json
+        for key in ('index_bars','future_bars'):
+            self.assertEqual(len(data[key]),1680)
+            self.assertTrue(data[key][0]['timestamp'].startswith(str(days[0].date())))
+        self.assertEqual(len(data['research']['bars']),1680)
+        self.assertIsNone(data['research']['bars'][0]['vix'])
+        self.assertEqual(data['range'],{'start':args['start'],'end':args['end']})
+        args['start']=args['end']
+        with patch.object(self.feed,'touch'):
+            smaller=self.c.post('/api/research',json=args).json
+        self.assertEqual(len(smaller['future_bars']),240)
+        self.assertEqual(len(smaller['research']['bars']),240)
+
     def test_session_resampling_excludes_partial_and_preserves_volume(self):
         dates=list(pd.date_range('2026-11-06 09:30',periods=120,freq='min'))+list(pd.date_range('2026-11-06 13:00',periods=120,freq='min'))
         rows=[dict(timestamp=t.isoformat(),open=1,high=2,low=1,close=2,volume=1,open_oi=3,close_oi=4) for t in dates]

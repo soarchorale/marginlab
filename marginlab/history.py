@@ -94,7 +94,9 @@ def reconstruct(path,product,universe,start,end,rate=.02):
     with connect(path) as db:
         records=db.execute('SELECT * FROM tq_option_minutes WHERE product=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp,symbol',
                            (product,pd.Timestamp(start).tz_localize(None).isoformat(),pd.Timestamp(end).tz_localize(None).isoformat())).fetchall()
-    for r in records:by_time.setdefault(r['timestamp'],{})[r['symbol']]=dict(r)
+    for r in records:
+        if r['source'] not in ('tqsdk_live_unverified_evidence','tqsdk_live_auction_evidence'):
+            by_time.setdefault(r['timestamp'],{})[r['symbol']]=dict(r)
     counts=Counter();valid_times=[]
     for stamp in boundaries(start,end):
         key=stamp.tz_localize(None).isoformat();at=stamp.timestamp()

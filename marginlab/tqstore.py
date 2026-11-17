@@ -27,7 +27,7 @@ def save_bars(path, symbol, frame, cutoff):
         rows.append((symbol,stamp.isoformat(),float(r.open),float(r.high),float(r.low),float(r.close),
                      float(r.volume),float(r.open_oi),float(r.close_oi)))
     with connect(path) as db:
-        db.executemany('INSERT OR REPLACE INTO tq_bars VALUES(?,?,?,?,?,?,?,?,?)', rows)
+        db.executemany('''INSERT INTO tq_bars VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(symbol,timestamp) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,volume=excluded.volume,open_oi=excluded.open_oi,close_oi=excluded.close_oi WHERE tq_bars.open IS NOT excluded.open OR tq_bars.high IS NOT excluded.high OR tq_bars.low IS NOT excluded.low OR tq_bars.close IS NOT excluded.close OR tq_bars.volume IS NOT excluded.volume OR tq_bars.open_oi IS NOT excluded.open_oi OR tq_bars.close_oi IS NOT excluded.close_oi''', rows)
 
 
 def save_snapshot(path,product,stamp,result,quotes):

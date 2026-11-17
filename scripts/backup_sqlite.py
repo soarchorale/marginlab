@@ -13,7 +13,7 @@ def backup(source,target):
         with sqlite3.connect(target) as copied:
             original.backup(copied)
             tables={r[0] for r in copied.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            for table in ('sessions','login_attempts','tq_lease'):
+            for table in ('sessions','login_attempts','tq_lease','tq_maintenance_lease'):
                 if table in tables:copied.execute('DELETE FROM '+table)
             copied.commit()
             copied.execute('VACUUM')

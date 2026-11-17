@@ -84,7 +84,7 @@ Open local `http://127.0.0.1:5001`. HTTPS origins enable Secure cookies, so plai
 
 ## 4. Acceptance and backfill
 
-The collector schedules four groups weekdays 09:20–15:10 Asia/Shanghai regardless of browser sessions. It retries connections, leases the database, and retains three calendar months by default. On weekends it waits.
+The collector schedules four groups weekdays 09:20–15:10 Asia/Shanghai regardless of browser sessions. It retries connections, leases the database, and retains one calendar month by default. On weekends it waits.
 
 Verify login, autonomous status, preserved MVIX history, and during trading the advancement of completed bars, option quotes, and MVIX. Missing permissions, downtime, and invalid quotes remain explicit gaps.
 
@@ -115,3 +115,42 @@ If Python 3.11 and an upgraded pip still cannot find a pinned release, inspect t
 ```sh
 sudo -u marginlab env PIP_INDEX_URL=https://pypi.org/simple bash scripts/setup-server.sh
 ```
+
+
+## Authoritative production database
+
+Production is the authoritative collection source. Local development may run with `MARGIN_MARKET_READ_ONLY=1` and a persisted `market_read_only=1` setting. Code releases must preserve the production database; do not upload the local replica database over it. Both read-only switches must be disabled to enable collection. Use the market-only snapshot workflow in [Operations](operations.md) to synchronize from production to development. The November 17 retention policy is one calendar month.
+
+Application diagnostics now rotate daily in `instance/logs/` (Asia/Shanghai), with 30 days retained by default. Existing nohup commands and process ownership remain unchanged; use the daily files instead of searching nohup output for routine HTTP, collector and coverage events. Set `MARGIN_LOG_DIR` and `MARGIN_LOG_RETENTION_DAYS` before startup to override these defaults. See `docs/operations.md` for event fields and privacy details. Keep `instance/` private and excluded from releases.
+
+
+## Repeatable nohup upgrades
+
+The new `deploy/release.py` upgrades an **existing Linux deployment**, using its already installed Python dependencies and existing credentials. It does not run setup or change passwords. The legacy setup script remains available for clean installations; an existing Python 3.13 environment can be selected explicitly. `scripts/serve.py` loads `instance/server.json` if present, otherwise it uses the application's existing environment/default settings. HOST/PORT select the listener; defaults remain 127.0.0.1:5001.
+
+```sh
+# Local checkout: test and package only, with no SSH or service restart.
+python3 deploy/release.py --build-only
+
+# After release approval: replace the placeholders with the actual SSH alias,
+# remote interpreter and verified current service PID.
+python3 deploy/release.py --host your-server \
+  --directory /opt/marginlab --remote-python /absolute/path/to/python3.13 \
+  --pid 12345 --bind 0.0.0.0 --port 5001
+```
+
+Use the local project interpreter if `python3` does not have the test dependencies. A loopback bind is recommended behind a reverse proxy; direct IP access requires an explicit public bind and suitable firewall rules. This command does not change firewall rules or TLS. Verify the public login URL separately after deployment.
+
+The first managed upgrade requires `--pid` unless `instance/service.pid` already exists. Later upgrades can reuse that PID file. Linux `/proc` must confirm that the process belongs to this project directory and runs app.py or serve.py; an unrelated/stale PID fails safely. Run SSH as the service owner (or an already authorized administrator). The existing process environment is inherited privately; neither passwords nor tokens are printed. A SQLite or environment read-only flag causes rejection instead of silently disabling production collection.
+
+The workflow is:
+
+1. Run local tests and build a timestamped source-only archive of the current working tree, including uncommitted files. No commit or push is required. Private runtime files are excluded.
+2. Upload to a private temporary directory through SSH, verify SHA256 and archive paths, then run dependency consistency checks and isolated tests with the remote interpreter before stopping collection. Dependencies are not installed automatically.
+3. Lock deployment, save existing source and a consistent SQLite backup under `instance/releases/<UTC timestamp>/`, and stop the verified service gracefully. A hung process aborts without SIGKILL.
+4. Replace only managed source paths, preserving instance/, environments and root credentials. Start `scripts/serve.py` with nohup and Waitress, record its PID and check local `/login` readiness. Collection uses the existing background supervisor; no extra daemon or systemd installation is needed.
+5. On replacement/startup failure, restore the old source and start the prior command with its original environment. Keep the live database as-is; never erase newer market observations with the backup. The script reports failure so the operator can verify the restored process.
+
+Routine diagnostics remain in daily logs. `instance/launcher.log` holds startup/third-party console output. Source and database backups remain private and are not pruned automatically. An upgrade creates a short collection interruption; deploy outside trading when possible. A local HTTP success proves web startup only, not collector health, external IP reachability or complete quotes. Inspect subsequent `collector_health` and `coverage_audit` events during trading.
+
+Automatic code rollback is intended for this version's compatible schema initialization. Future destructive schema migrations require an explicit migration/restore plan; the script does not promise database rollback. Repairing historical MVIX is a separate audited operation and is not automatically run during release.

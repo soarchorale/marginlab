@@ -30,6 +30,8 @@ def prune(app):
         db.execute('DELETE FROM tq_snapshots WHERE timestamp<?',(cutoff,))
         db.execute('DELETE FROM tq_option_minutes WHERE timestamp<?',(cutoff,))
         db.execute('UPDATE market_sync SET coverage_start=? WHERE coverage_start<?', (cutoff,cutoff))
+        db.execute('DELETE FROM tq_dirty_days WHERE day<?',(cutoff,))
+        db.execute('DELETE FROM tq_coverage WHERE day<?',(cutoff,))
     return cutoff
 
 
@@ -59,7 +61,7 @@ def cached_live(app, symbol, period, start=None, end=None, fetcher=None):
     if period != 'daily':
         raise ValueError('The legacy online cache supports daily bars only; import full timestamps for intraday research')
     config = settings(app)
-    cutoff = prune(app)
+    cutoff = cutoff_for(config['months'])
     today = datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
     try:
         requested_start = pd.Timestamp(start or cutoff).strftime('%Y-%m-%d')
@@ -116,7 +118,6 @@ def cached_live(app, symbol, period, start=None, end=None, fetcher=None):
 
 
 def cache_summary(app):
-    prune(app)
     with connect(app.config['DATABASE']) as db:
         rows = db.execute('SELECT symbol,period,COUNT(*) AS count,MIN(timestamp) AS first,MAX(timestamp) AS last FROM market_bars GROUP BY symbol,period').fetchall()
     with connect(app.config['DATABASE']) as db:

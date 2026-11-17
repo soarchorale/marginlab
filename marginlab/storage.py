@@ -2,10 +2,17 @@
 from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
+from contextvars import ContextVar
+
+_snapshot = ContextVar("market_read_snapshot", default=None)
 
 
 @contextmanager
 def connect(path):
+    existing=_snapshot.get()
+    if existing and existing[0]==str(path):
+        yield existing[1]
+        return
     db = sqlite3.connect(path, timeout=10)
     db.row_factory = sqlite3.Row
     try:
@@ -38,3 +45,12 @@ def initialize(path):
         if 'credential_tag' not in columns:
             db.execute("ALTER TABLE sessions ADD COLUMN credential_tag TEXT NOT NULL DEFAULT ''")
     path.chmod(0o600)
+
+
+@contextmanager
+def read_snapshot(path):
+    with connect(path) as db:
+        db.execute('BEGIN')
+        token=_snapshot.set((str(path),db))
+        try:yield db
+        finally:_snapshot.reset(token)

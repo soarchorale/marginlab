@@ -23,7 +23,7 @@ class HistoryTests(unittest.TestCase):
             feed.snapshot('1000',morning,at,market_epoch=at-1)
         with connect(app.config['DATABASE']) as db:
             quality=dict(db.execute('SELECT product,quality FROM tq_snapshots'))
-        self.assertEqual(quality,{'50':'valid','1000':'insufficient'})
+        self.assertEqual(quality,{'50':'valid','300':'insufficient','1000':'insufficient'})
         with connect(app.config['DATABASE']) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM tq_option_minutes WHERE product='50'").fetchone()[0],len(rows))
 
@@ -60,6 +60,9 @@ class HistoryTests(unittest.TestCase):
             result=payload(app,{'symbol':'50','period':'1'})
         self.assertEqual([r['value'] for r in result['mvix_history']],[21,None,23])
         self.assertEqual(result['mvix_cache']['valid_count'],2)
+        with connect(path) as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM tq_option_minutes').fetchone()[0],1)
+        from marginlab.cache import prune
+        prune(app)
         with connect(path) as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM tq_option_minutes').fetchone()[0],0)
 
     def test_asof_never_uses_future_or_cross_session(self):

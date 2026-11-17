@@ -1,4 +1,4 @@
-"""MVIX v1: quote-mid variance replication, ACT/365, 30-day bracketing.
+"""MVIX v1.1: quote-mid variance replication, ACT/365, 30-day bracketing.
 
 Local adaptation of Cboe mathematics; no time interpolation, extrapolation,
 trade-price fallback or SDK IV surface interpolation.
@@ -6,7 +6,7 @@ trade-price fallback or SDK IV surface interpolation.
 import math
 from collections import defaultdict
 
-METHOD = 'MVIX-1.0-mid-ACT365-bracket30'
+METHOD = 'MVIX-1.1-mid-ACT365-bracket30-null-strikes'
 YEAR = 365 * 86400
 
 
@@ -51,6 +51,16 @@ def term_variance(rows, at, rate):
     pair = chain[k0]
     if mid(pair.get('CALL')) is None or mid(pair.get('PUT')) is None:
         raise ValueError('Missing call or put quote at K0')
+    # Validate K0 before removing peripheral null quotes. Never shift K0 to
+    # hide a missing central pair, or reinterpret an unknown quote as zero.
+    excluded = []
+    for strike, sides in list(chain.items()):
+        null_sides = [side for side, row in sides.items()
+                      if any(row.get(field) is None or not math.isfinite(row[field])
+                             for field in ('bid', 'ask'))]
+        if null_sides:
+            excluded.append(dict(strike=strike, sides=sorted(null_sides), reason='null_quote'))
+            del chain[strike]
     selected = [(k0, (mid(pair['CALL'])+mid(pair['PUT']))/2)]
     counts = {}
     for side, strikes in [('PUT', sorted((k for k in chain if k < k0), reverse=True)),
@@ -85,7 +95,8 @@ def term_variance(rows, at, rate):
     if not math.isfinite(variance) or variance <= 0:
         raise ValueError('The calculated variance is invalid')
     return dict(expiry=expiry,t=t,variance=variance,forward=forward,k0=k0,
-                strikes=[k for k,_ in selected],counts=counts)
+                strikes=[k for k,_ in selected],counts=counts,
+                excluded_strikes=sorted(excluded,key=lambda row:row['strike']))
 
 
 def calculate(rows, at, rate=.02):

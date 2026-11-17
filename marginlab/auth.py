@@ -16,6 +16,9 @@ def digest(token):
 
 def install_auth(app):
     path = app.config['DATABASE']
+    from .session_activity import SessionActivity
+    activity=SessionActivity(path)
+    app.extensions['session_activity']=activity
     with connect(path) as db:
         db.execute('INSERT OR IGNORE INTO admin VALUES(1,?)', (DEFAULT_ADMIN_HASH,))
 
@@ -43,10 +46,10 @@ def install_auth(app):
         token = request.cookies.get('margin_session', '')
         g.auth_session = None
         with connect(path) as db:
-            db.execute('DELETE FROM sessions WHERE expires<=? OR last_seen<=?', (now, now-app.config['AUTH_IDLE_TIMEOUT']))
-            db.execute('DELETE FROM login_attempts WHERE attempted<?', (now-900,))
             if token and len(token) <= 128:
                 g.auth_session = db.execute('SELECT * FROM sessions WHERE token_hash=?', (digest(token),)).fetchone()
+                if g.auth_session and (g.auth_session['expires']<=now or activity.effective_seen(g.auth_session)<=now-app.config['AUTH_IDLE_TIMEOUT']):
+                    g.auth_session=None
                 if g.auth_session and g.auth_session['authenticated']:
                     current_hash = db.execute('SELECT password_hash FROM admin WHERE id=1').fetchone()[0]
                     if not hmac.compare_digest(g.auth_session['credential_tag'], digest(current_hash)):
@@ -65,8 +68,7 @@ def install_auth(app):
             if not g.auth_session or not hmac.compare_digest(g.auth_session['csrf'], csrf):
                 return jsonify(error='请求验证失效，请刷新页面后重试'), 403
         if g.auth_session:
-            with connect(path) as db:
-                db.execute('UPDATE sessions SET last_seen=? WHERE token_hash=?', (now, g.auth_session['token_hash']))
+            activity.touch(g.auth_session,now)
 
     @app.context_processor
     def auth_context():
@@ -101,8 +103,8 @@ def install_auth(app):
         # Reserve an attempt before expensive hashing; transaction prevents concurrent limit bypass.
         with connect(path) as db:
             db.execute('BEGIN IMMEDIATE')
-            per_ip = db.execute('SELECT COUNT(*) FROM login_attempts WHERE ip=?', (ip,)).fetchone()[0]
-            total = db.execute('SELECT COUNT(*) FROM login_attempts').fetchone()[0]
+            per_ip = db.execute('SELECT COUNT(*) FROM login_attempts WHERE ip=? AND attempted>?', (ip,now-900)).fetchone()[0]
+            total = db.execute('SELECT COUNT(*) FROM login_attempts WHERE attempted>?',(now-900,)).fetchone()[0]
             if per_ip >= 5 or total >= 30:
                 response = make_response(render_template('login.html', error='尝试次数过多，请在 15 分钟后重试。', next=destination), 429)
                 response.headers['Retry-After'] = '900'

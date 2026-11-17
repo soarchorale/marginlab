@@ -8,9 +8,9 @@ In the examples below, `/path/to/marginlab` represents your local checkout; repl
 
 ```sh
 cd /path/to/marginlab
-.pixi/envs/default/bin/python app.py
+MARGIN_MARKET_READ_ONLY=1 .pixi/envs/default/bin/python app.py
 # Default: http://127.0.0.1:5000
-PORT=5001 .pixi/envs/default/bin/python app.py
+MARGIN_MARKET_READ_ONLY=1 PORT=5001 .pixi/envs/default/bin/python app.py
 ```
 
 Alternatively use `pixi run dev`. Pixi targets macOS ARM64. Moving an installed environment can leave generated command shebangs referencing the old directory; recreate it with Pixi if those commands fail rather than editing vendor binaries.
@@ -36,7 +36,7 @@ The default background collector subscribes to all four products on weekdays 09:
 - MVIX uses the last known bid/ask midpoint before each completed minute boundary, ACT/365, and total-variance interpolation between expirations bracketing 30 days. It is not an official Cboe index. The default assumed annual risk-free rate is 2%, configurable with `MVIX_RATE`.
 - Within verified contiguous historical Tick coverage, unchanged quotes do not expire after ten minutes. No future prices, trade-close substitution, or cross-session carry-forward is used. Invalid updates cannot be skipped to reuse older valid quotes.
 - Live sampling requires an index heartbeat no older than ten seconds. Missing/invalid observations remain gaps. Valid persisted MVIX values are reused.
-- Retention defaults to three calendar months, configurable to 1–36. This does not mean the existing data covers three complete months.
+- Retention defaults to one calendar month, configurable to 1–36. This does not mean the existing data covers one complete month.
 - Local minute bars aggregate into 5/15/30/60-minute and daily bars. Daily bars require 240 completed trading minutes. Actual futures contracts remain separate across rolls.
 - The volume profile assigns minute volume to minute close. It does not infer trade direction or actual holder cost.
 - Demo data is explicitly simulated. CSV requires `timestamp,open,high,low,close,vix`, with optional volume. Naive timestamps mean Asia/Shanghai. Volatility uses index points, not decimals. CSV sampling must match the selected period.
@@ -94,3 +94,11 @@ Routes: `/`, `/pricing`, `/chips`, `/method`, `/settings`, `/login`, and POST `/
 Tests use temporary databases without authentication bypasses. Release packaging uses a source allowlist, excluding private/runtime files and environments. Existing backup targets are never overwritten; choose a fresh filename for later backups. Linux/systemd/TLS and trading-session operation require verification on the actual target host.
 
 Documentation, comments, CLI prompts, and application-owned logs use English. Browser copy, UI state labels, and upstream schema keys retain their original language.
+
+## November 17 interface and operations update
+
+Start/end dates are always visible in the top toolbar. Residual training/accumulation controls, correlation windows and independent-return parameters sit next to their corresponding charts and submit through the shared research form. The smile includes a current underlying-price marker; the phase plot has its own time-range slider and fades the latest point only when the selected range includes it.
+
+The collection/coverage panel is removed from the page. Background checks continue, with structured daily logs under `instance/logs/` and configurable 30-day log retention. The market history policy remains one calendar month. Local development reads synchronized production data and does not collect quotes.
+
+Use `python deploy/release.py --build-only` to test and package the current working tree. The same script can upload a source-only release over SSH and restart an existing Linux installation using nohup and Waitress after explicit release approval. It preserves runtime data/configuration and creates a pre-upgrade backup. See [Deployment](docs/deployment.md#repeatable-nohup-upgrades) for arguments, rollback limits and first-upgrade PID handling.

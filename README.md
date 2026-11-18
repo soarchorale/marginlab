@@ -102,3 +102,6 @@ Start/end dates are always visible in the top toolbar. Residual training/accumul
 The collection/coverage panel is removed from the page. Background checks continue, with structured daily logs under `instance/logs/` and configurable 30-day log retention. The market history policy remains one calendar month. Local development reads synchronized production data and does not collect quotes.
 
 Use `python deploy/release.py --build-only` to test and package the current working tree. The same script can upload a source-only release over SSH and restart an existing Linux installation using nohup and Waitress after explicit release approval. It preserves runtime data/configuration and creates a pre-upgrade backup. See [Deployment](docs/deployment.md#repeatable-nohup-upgrades) for arguments, rollback limits and first-upgrade PID handling.
+
+
+Dashboard navigation reuses version-keyed analysis results (five-minute maximum lifetime), and research JSON supports gzip transport. Only the latest selected-product quote timestamp is shown above the controls. Administrator settings expose the daily-cache refresh interval; retention is deployment-owned via MARGIN_HISTORY_MONTHS or the existing stored policy, and session/security implementation notes are documented here rather than displayed on that page.

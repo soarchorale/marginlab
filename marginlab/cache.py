@@ -1,5 +1,5 @@
 """Bounded rolling history with incremental refresh and explicit stale fallback."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from threading import BoundedSemaphore, Thread
 from queue import Queue, Empty
@@ -14,12 +14,17 @@ _slots = BoundedSemaphore(2)
 def settings(app):
     with connect(app.config['DATABASE']) as db:
         saved = dict(db.execute('SELECT key,value FROM settings').fetchall())
-    return dict(months=int(saved.get('history_months', app.config['HISTORY_MONTHS'])),
+    return dict(months=int(app.config.get('HISTORY_MONTHS_OVERRIDE') or saved.get('history_months', app.config['HISTORY_MONTHS'])),
                 refresh_seconds=int(saved.get('refresh_seconds', app.config['MARKET_REFRESH_SECONDS'])))
 
 
 def cutoff_for(months):
     return (pd.Timestamp(datetime.now(ZoneInfo('Asia/Shanghai')).date())-pd.DateOffset(months=months)).strftime('%Y-%m-%d')
+
+
+def research_start(end=None):
+    end = pd.Timestamp(end).date() if end else datetime.now(ZoneInfo('Asia/Shanghai')).date()
+    return (end - timedelta(days=6)).isoformat()
 
 
 def prune(app):

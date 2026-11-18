@@ -162,9 +162,10 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(c.post('/settings',data={'history_months':1}).status_code,302)
         login(c)
         self.assertEqual(c.post('/settings',data={'history_months':0,'refresh_seconds':900}).status_code,400)
-        self.assertEqual(c.post('/settings',data={'history_months':6,'refresh_seconds':120}).status_code,302)
+        self.assertEqual(c.post('/settings',data={'history_months':6,'refresh_seconds':120}).status_code,400)
+        self.assertEqual(c.post('/settings',data={'refresh_seconds':120}).status_code,302)
         from marginlab.cache import settings
-        self.assertEqual(settings(self.app),dict(months=6,refresh_seconds=120))
+        self.assertEqual(settings(self.app),dict(months=1,refresh_seconds=120))
 
 
 if __name__=='__main__':unittest.main()

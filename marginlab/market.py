@@ -139,14 +139,14 @@ def payload(app,args):
     from .storage import read_snapshot
     from .health import read_health
     from .coverage import latest_report
-    from .cache import settings,cutoff_for
+    from .cache import settings,research_start
     product=args.get('symbol','50')
     if product not in PRODUCTS:raise ValueError('Unsupported index product')
     feed=request_feed(app,product)
     selected=dict(args)
     # Resolve time-relative defaults before keying; midnight must not reuse yesterday.
-    selected['start']=selected.get('start') or cutoff_for(settings(app)['months'])
     selected['end']=selected.get('end') or str(pd.Timestamp.now(tz='Asia/Shanghai').date())
+    selected['start']=selected.get('start') or research_start(selected['end'])
     for attempt in range(3):
         version=revision(app.config['DATABASE'])
         with connect(app.config['DATABASE']) as db:

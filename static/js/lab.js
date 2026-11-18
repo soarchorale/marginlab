@@ -131,11 +131,13 @@ async function loadResearch(e,{background=false}={}){
  const body=researchParams(),query=JSON.stringify(body);
  // Do not submit unfinished form edits or overlap an active request from a timer.
  if(background&&(researchPending||query!==renderedRequest))return;
+ let loadingTimer;
  const id=++requestId;controller?.abort();controller=new AbortController();researchPending=true;
  if(!background){
   document.querySelectorAll('.chart-apply').forEach(button=>button.disabled=true);
   document.querySelectorAll('.chart-parameter-status').forEach(label=>label.textContent='正在更新…');
-  $('error').hidden=true;$('loading').hidden=false;$('refresh').disabled=true;
+  $('error').hidden=true;$('loading').hidden=true;$('refresh').disabled=true;
+  loadingTimer=setTimeout(()=>{if(id===requestId&&researchPending)$('loading').hidden=false;},350);
   $('research-content').classList.add('muted-content');$('export').disabled=true;
  }
  try{
@@ -147,7 +149,7 @@ async function loadResearch(e,{background=false}={}){
   // Keep chart nodes and hover state intact when a poll returns unchanged data.
   if(!background||key!==renderedPayload||$('research-content').classList.contains('muted-content')){
    if(data.source==='tqsdk')renderTq(data);
-   else{marketData=null;researchData=data;renderResearch();$('research-content').classList.remove('muted-content');$('export').disabled=false;}
+   else{marketData=null;researchData=data;$('market-updated').textContent='数据时间：'+stampLabel(data.meta.asof);renderResearch();$('research-content').classList.remove('muted-content');$('export').disabled=false;}
   }
   renderedRequest=query;renderedPayload=key;$('error').hidden=true;
   if(!background)document.querySelectorAll('.chart-parameter-status').forEach(label=>label.textContent='已更新');
@@ -156,6 +158,7 @@ async function loadResearch(e,{background=false}={}){
   if(!background)document.querySelectorAll('.chart-parameter-status').forEach(label=>label.textContent='更新失败：'+error.message);
   $('error').textContent=error.message+(background?'。自动刷新失败，保留上次成功的数据。':'。下方旧结果已置灰，不代表本次参数。');$('error').hidden=false;
  }finally{
+  clearTimeout(loadingTimer);
   if(id===requestId){researchPending=false;if(!background){$('loading').hidden=true;$('refresh').disabled=false;document.querySelectorAll('.chart-apply').forEach(button=>button.disabled=false);}}
  }
 }
@@ -191,17 +194,16 @@ function candleChart(id,bars){
 }
 function renderTq(d){
  marketData=d;$('tq-market').hidden=false;$('research-content').classList.remove('muted-content');$('export').disabled=true;
- $('source-badge').textContent='TqSdk · 股指行情';$('tq-cards').replaceChildren();
- d.cards.forEach(c=>{const a=document.createElement('article');const label=document.createElement('div'),v=document.createElement('strong'),note=document.createElement('small');label.textContent=c.name+' · '+c.contract;v.textContent=fmt(c.future_price,1);note.textContent='基差 '+fmt(c.future_price==null||c.index_price==null?null:c.future_price-c.index_price,1)+' · '+(c.quote_time||'');a.append(label,v,note);$('tq-cards').append(a);});
+ $('source-badge').textContent='TqSdk · 股指行情';
  const status=d.status;$('future-title').textContent=(status.name||'股指期货')+' · '+(status.contract||'正在解析主力');
- $('tq-status').textContent=(d.collector.error||({'replica':'本机只读远端同步行情','connecting':'正在连接并订阅行情，首次加载可能需要数十秒','streaming':'行情订阅已连接','scheduled':'自动采集已启用，等待工作日 09:20–15:10','idle':'行情采集待启动','shared':'其他进程正在采集行情'}[d.collector.state]||d.collector.state))+'。最新行情：'+(status.quote_time||'尚无')+'。历史保留 '+d.cache.retention_months+' 个月；'+(d.collector.state==='replica'?'本机不连接行情源；数据通过远端同步更新。':d.collector.automatic?'后台自动采集四组行情，不依赖页面打开或登录。':'按页面需求采集，关闭页面后停止续订。');
+ $('market-updated').textContent='最新行情：'+(status.quote_time?status.quote_time.replace('T',' ').slice(0,19):'暂无');
  candleChart('future-chart',d.future_bars);
  const f=d.future_bars;chart('oi-chart',[{name:'成交量',data:f.map((r,i)=>[i,r.volume])},{name:'持仓量',right:true,data:f.map((r,i)=>[i,r.close_oi])}],{dual:true,xRange:[0,Math.max(f.length-1,1)],xLabel:i=>f[Math.round(i)]?.timestamp.replace('T',' ').slice(5,16)||'',timeLabel:i=>stampLabel(f[Math.round(i)]?.timestamp)});
  const m=d.mvix,valid=d.mvix_latest_valid??(m?.quality==='valid'?m:null),cache=d.mvix_cache;
- const mvixCaption=valid?`SQLite · ${valid.timestamp.replace('T',' ')} · ${cache?.valid_count??1} 个有效快照`:'所选区间暂无有效快照';
+ const mvixCaption=valid?(valid.quality==='reference'?'参考估算':'指数点'):'所选区间暂无有效快照';
  renderSmile(d.smile);
 
- $('tq-quality').textContent=(d.research_reason||'MVIX 漂移基于对应现货指数；期货换月不进入研究序列。')+' '+(m?'最近 MVIX 快照 '+m.timestamp+' · '+(m.quality==='reference'?'Excel 参考估算':m.quality==='valid'?'有效，利率为配置假设':m.details.reason||'报价不足'):'暂无 MVIX 快照；不使用成交价代替中间价。')+' '+d.cache.history_note;
+
  if(d.research){researchData=d.research;renderResearch();$('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(!['valid','reference'].includes(m?.quality)?' · 最近采样无效，显示历史值':'');$('export').disabled=false;return;}
  researchData=null;phaseSelection=null;$('phase-window').hidden=true;$('cache-status').hidden=true;const ib=d.index_bars,last=ib.at(-1);
  $('metric-price').textContent=fmt(last?.close,1);$('symbol-mini').textContent=d.product+' 指数';$('metric-date').textContent=last?.timestamp.replace('T',' ')||'等待行情';$('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(valid&&!['valid','reference'].includes(m?.quality)?' · 最近采样无效，显示历史值':'');$('metric-corr').textContent='—';$('level-corr').textContent='等待同期 MVIX 历史';$('metric-drift').textContent='—';$('metric-state').textContent='样本积累中';

@@ -79,9 +79,9 @@ Minute-end quotes remain bid/ask evidence, not trade-close substitutes. Invalid 
 
 ## Request work and maintenance
 
-Retention runs at startup and hourly in the existing supervisor; changing retention requests the next background cleanup. Session/expired-login-attempt cleanup runs with maintenance, outside page handlers. Authentication still checks database revocation, absolute/idle expiry and credentials on every protected request. Activity persistence is throttled to 60 seconds, with a bounded 4,096-session memory buffer. A process restart or buffer eviction may lose up to 60 seconds of activity and expire a session slightly early; it cannot extend absolute expiration or restore a revoked session.
+Retention runs at startup and hourly in the existing supervisor; deployment retention changes take effect on restart. Session/expired-login-attempt cleanup runs with maintenance, outside page handlers. Authentication still checks database revocation, absolute/idle expiry and credentials on every protected request. Activity persistence is throttled to 60 seconds, with a bounded 4,096-session memory buffer. A process restart or buffer eviction may lose up to 60 seconds of activity and expire a session slightly early; it cannot extend absolute expiration or restore a revoked session.
 
-Analysis cache limits: 16 entries, 32 MiB of serialized payloads, 60-second TTL, two distinct computations at once, and a 20-second wait for an identical running computation. These are current implementation defaults. Busy requests receive a retryable error. The owner computation is not forcibly cancelled after 20 seconds. Serialization, response copies and in-flight analysis consume additional memory outside the cache byte limit.
+Analysis cache limits: 16 entries, 32 MiB of serialized payloads, 300-second TTL, two distinct computations at once, and a 20-second wait for an identical running computation. These are current implementation defaults. Busy requests receive a retryable error. The owner computation is not forcibly cancelled after 20 seconds. Serialization, response copies and in-flight analysis consume additional memory outside the cache byte limit.
 
 Keys include selected parameters, resolved date bounds, retention, interest rate, actual futures contract and market revision. Revisions cover collection and historical repair. Analysis reads a consistent SQLite snapshot; a version race retries up to three times. Health, coverage, jobs and collection status are refreshed outside the cached analysis. Metadata-only polls preserve unchanged charts; collection health and coverage details are reported through daily logs. No concurrency capacity claim is made without a production load test.
 
@@ -139,3 +139,12 @@ tail -f "instance/logs/marginlab-$(TZ=Asia/Shanghai date +%F).log"
 ```
 
 After midnight, reopen the new daily file when following logs manually. Existing nohup/start commands still work: no additional process or cron is required. The nohup output may still contain Python startup failures or third-party console banners; routine application diagnostics belong in the daily files. File logging is not remote log shipping, and no process can write logs while stopped.
+
+
+## Dashboard simplification and request transport
+
+The default live research range is seven Shanghai calendar dates, including the end date. For example, November 18 selects November 12–18. The default bar interval remains one minute. Manual date selection still supports the configured retention window; the shorter display range does not prune stored history.
+
+The dashboard keeps the latest selected-product quote timestamp in its heading, removes the four-product spot cards and operational prose, and retains data-quality provenance in chart tooltips. The settings page only edits the legacy daily-cache refresh interval; research polling remains 15 seconds. Retention submissions are rejected server-side. Set MARGIN_HISTORY_MONTHS at deployment to override the persisted retention setting; absent that override, existing installations retain their stored policy (default one month).
+
+Research results remain in the bounded, version-keyed process cache for up to 300 seconds. Market revisions invalidate results immediately. Page navigation still makes an authenticated request and rebuilds charts; there is no browser-persisted research cache. A loading indicator appears only after 350 milliseconds. Research JSON uses gzip when accepted; login/settings responses are not compressed by this hook. Local November 17 baseline: about 0.46 seconds cold and 0.11 seconds warm, with a 6.1 MB uncompressed one-month payload. These are local measurements, not remote concurrency guarantees.

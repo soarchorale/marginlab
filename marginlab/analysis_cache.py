@@ -7,7 +7,7 @@ import time
 
 
 class AnalysisCache:
-    def __init__(self,max_bytes=32*1024*1024,max_entries=16,ttl=60,max_computations=2,wait_seconds=20):
+    def __init__(self,max_bytes=32*1024*1024,max_entries=16,ttl=300,max_computations=2,wait_seconds=20):
         self.max_bytes=max_bytes;self.max_entries=max_entries;self.ttl=ttl
         self.max_computations=max_computations;self.wait_seconds=wait_seconds
         self.lock=threading.Lock();self.entries=OrderedDict();self.pending={};self.bytes=0

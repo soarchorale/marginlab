@@ -29,6 +29,7 @@ def create_app(config=None):
         DATABASE=os.environ.get('MARGIN_DATABASE', str(ROOT/'instance'/'margin.sqlite3')),
         LOG_DIR=os.environ.get('MARGIN_LOG_DIR'),
         LOG_RETENTION_DAYS=int(os.environ.get('MARGIN_LOG_RETENTION_DAYS','30')),
+        HISTORY_MONTHS_OVERRIDE=os.environ.get('MARGIN_HISTORY_MONTHS'),
         HISTORY_MONTHS=int(os.environ.get('MARGIN_HISTORY_MONTHS', '1')),
         MARKET_REFRESH_SECONDS=900, MARKET_RETRY_SECONDS=60, MARKET_TIMEOUT=20,
         AUTH_IDLE_TIMEOUT=1800, AUTH_MAX_AGE=28800,
@@ -77,8 +78,8 @@ def create_app(config=None):
 
     @app.get('/')
     def index():
-        from .cache import cutoff_for,settings
-        return render_template('index.html', page='research', page_title='波动率研究', history_cutoff=cutoff_for(settings(app)['months']))
+        from .cache import research_start
+        return render_template('index.html', page='research', page_title='波动率研究', history_cutoff=research_start())
 
     @app.get('/pricing')
     def pricing_page():
@@ -94,13 +95,28 @@ def create_app(config=None):
         from .storage import connect
         from flask import redirect
         if request.method == 'POST':
-            months = number(request.form, 'history_months', 1, 1, 36, True)
+            if 'history_months' in request.form:
+                raise ValueError('History retention is controlled by deployment configuration')
             refresh = number(request.form, 'refresh_seconds', 900, 60, 86400, True)
             with connect(app.config['DATABASE']) as db:
-                db.executemany('INSERT OR REPLACE INTO settings VALUES(?,?)', [('history_months',str(months)),('refresh_seconds',str(refresh))])
-            app.extensions['tq_feed'].last_prune=0
+                db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', ('refresh_seconds',str(refresh)))
             return redirect('/settings?saved=1')
         return render_template('settings.html', page='settings', page_title='管理员设置', settings=settings(app), cache_rows=cache_summary(app), saved=request.args.get('saved')=='1')
+
+    @app.after_request
+    def compress_research(response):
+        # Only compress authenticated market JSON, never login/session responses.
+        if (request.endpoint == 'research' and response.status_code == 200
+                and response.mimetype == 'application/json'
+                and request.accept_encodings.quality('gzip') > 0
+                and not response.headers.get('Content-Encoding')):
+            import gzip
+            body=response.get_data()
+            if len(body)>1024:
+                response.set_data(gzip.compress(body,compresslevel=1,mtime=0))
+                response.headers['Content-Encoding']='gzip'
+        if request.endpoint == 'research':response.vary.add('Accept-Encoding')
+        return response
 
     @app.route('/api/research', methods=['GET','POST'])
     def research():

@@ -1,5 +1,13 @@
 # Known issues and deferred work
 
+## November 19 release review
+
+The November 17 Linux/nohup upgrade succeeded after explicitly enabling SQLite URI attachments in the replica import tool. That deployment preserved production collection; historical repair remains a separate operation.
+
+The November 18 post-close audit matched the underlying database: all four indices and active futures contracts had 240 minute bars each. HO, IO and MO each had quotes for 240 minutes, 237 valid MVIX values and three auction records at 14:58–15:00. No invalid MVIX samples were recorded that day. Auction display carries are not independent observations. This finding does not resolve earlier historical gaps.
+
+Follow-up: inspect daily coverage and collector health after release. Measure authenticated request latency and chart rendering under concurrent production-like traffic before changing the cache limits further. In the one-month local benchmark, gzip reduced a 6.1 MB response to 0.64 MB; navigation still requests data and redraws charts. Keep the existing raw-evidence requirement for historical repairs.
+
 Reviewed through 2026-11-17. Dated sections preserve historical findings; later implementation notes supersede them. Local changes are not production deployment or load-test evidence.
 
 ## Deferred historical MVIX repair

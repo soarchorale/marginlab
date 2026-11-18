@@ -30,8 +30,8 @@ function chart(id,series,options={}){
  const Y=(y,right=false)=>{const r=right?yright:yr;return pad.t+(1-(y-r[0])/(r[1]-r[0]))*ph;};
  for(let i=0;i<=4;i++){
   const y=pad.t+i*ph/4;add(svg,'line',{x1:pad.l,y1:y,x2:w-pad.r,y2:y,stroke:'#edf0f2','stroke-dasharray':'3 4'});
-  add(svg,'text',{x:pad.l-9,y:y+3,'text-anchor':'end'},fmt(yr[1]-(yr[1]-yr[0])*i/4,options.decimals??2));
-  if(options.dual)add(svg,'text',{x:w-pad.r+8,y:y+3},fmt(yright[1]-(yright[1]-yright[0])*i/4,1));
+  add(svg,'text',{x:pad.l-9,y:y+3,'text-anchor':'end',style:options.axisColors?'fill:'+options.axisColors[0]:''},fmt(yr[1]-(yr[1]-yr[0])*i/4,options.decimals??2));
+  if(options.dual)add(svg,'text',{x:w-pad.r+8,y:y+3,style:options.axisColors?'fill:'+options.axisColors[1]:''},fmt(yright[1]-(yright[1]-yright[0])*i/4,1));
  }
  for(let i=0;i<=4;i++){const x=xr[0]+(xr[1]-xr[0])*i/4;add(svg,'text',{x:X(x),y:h-13,'text-anchor':'middle'},options.xLabel?options.xLabel(x):fmt(x,3));}
  if(options.band){const [lo,hi]=options.band;const a=Math.max(pad.l,X(lo)),b=Math.min(w-pad.r,X(hi));if(b>a)add(svg,'rect',{x:a,y:pad.t,width:b-a,height:ph,fill:'#118c8009',stroke:'#b8d9d1','stroke-dasharray':'4 4'});}
@@ -43,7 +43,8 @@ function chart(id,series,options={}){
  });
  if(Number.isFinite(options.reference?.value)){const ref=options.reference;const mark=add(svg,'line',{x1:X(ref.value),x2:X(ref.value),y1:pad.t,y2:h-pad.b,stroke:'#586a80','stroke-width':1.5,'stroke-dasharray':'6 4',class:'smile-spot-line'});mark.append(el('title',{},ref.label));add(svg,'text',{x:Math.max(pad.l+5,Math.min(X(ref.value)+6,w-pad.r-100)),y:pad.t-7,style:'fill:#586a80'},'标的 '+fmt(ref.value,2));}
  if(options.current){const [x,y]=options.current;add(svg,'circle',{cx:X(x),cy:Y(y),r:5,fill:'#d35b36',stroke:'#fff','stroke-width':1.5,class:'phase-current','aria-label':'最新价格与波动率位置'});}
- if(options.legend)options.legend.forEach((name,i)=>add(svg,'text',{x:pad.l+i*130,y:12,style:`fill:${colors[i]}`},'● '+name));
+ const legend=options.legend===true?series.map(item=>item.name):options.legend;
+ if(legend)legend.forEach((name,i)=>add(svg,'text',{x:pad.l+i*130,y:12,style:`fill:${series[i].color||colors[i]}`},'● '+name));
  const line=add(svg,'line',{x1:0,x2:0,y1:pad.t,y2:h-pad.b,stroke:'#93ada6','stroke-dasharray':'3 3',visibility:'hidden'});
  svg.addEventListener('pointermove',e=>{const rect=svg.getBoundingClientRect();const px=(e.clientX-rect.left)*w/rect.width;const val=xr[0]+(px-pad.l)/pw*(xr[1]-xr[0]);const distance=d=>options.band?Math.hypot(X(d[0])-px,Y(d[1])-(e.clientY-rect.top)*h/rect.height):Math.abs(d[0]-val);let nearest=valid.reduce((a,b)=>distance(a)<distance(b)?a:b);line.setAttribute('x1',X(nearest[0]));line.setAttribute('x2',X(nearest[0]));line.setAttribute('visibility','visible');const tip=$('chart-tooltip');tip.textContent=options.tooltip?options.tooltip(nearest[0],nearest):(options.timeLabel?options.timeLabel(nearest[0])+'\n':'')+series.filter(s=>s.data.length).map(s=>{const d=s.data.find(d=>d[0]===nearest[0]);return s.name+': '+fmt(d?.[1]);}).join('\n');tip.hidden=false;tip.style.left=Math.max(8,Math.min(e.clientX+15,window.innerWidth-230))+'px';tip.style.top=Math.max(8,Math.min(e.clientY+15,window.innerHeight-130))+'px';});
  svg.addEventListener('pointerleave',()=>{line.setAttribute('visibility','hidden');$('chart-tooltip').hidden=true;});
@@ -63,7 +64,7 @@ function renderSmile(smile){
  if(!series.length){$('smile-chart').textContent='请勾选认购或认沽';return;}
  const spot=marketData?.index_bars?.at(-1);
  if(spot)$('smile-note').textContent+=' · 标的 '+fmt(spot.close,2)+'（'+stampLabel(spot.timestamp)+'）';
- chart('smile-chart',series,{reference:spot?{value:spot.close,label:'区间最新标的 '+fmt(spot.close,2)+' · '+stampLabel(spot.timestamp)}:null,xLabel:x=>fmt(x,0),decimals:1,tooltip:x=>stampLabel(smile.timestamp)+'\n到期 '+term.expiry_date+' · 执行价 '+fmt(x,0)+'\n'+series.map(s=>{const row=s.data.find(d=>d[0]===x),q=row?.[2];return s.name+' IV '+fmt(row?.[1],2)+'% · 中间价 '+fmt(q?.mid,2)+(q?.quote_time?'\n报价时间 '+stampLabel(q.quote_time):'');}).join('\n')});
+ chart('smile-chart',series,{legend:true,reference:spot?{value:spot.close,label:'区间最新标的 '+fmt(spot.close,2)+' · '+stampLabel(spot.timestamp)}:null,xLabel:x=>fmt(x,0),decimals:1,tooltip:x=>stampLabel(smile.timestamp)+'\n到期 '+term.expiry_date+' · 执行价 '+fmt(x,0)+'\n'+series.map(s=>{const row=s.data.find(d=>d[0]===x),q=row?.[2];return s.name+' IV '+fmt(row?.[1],2)+'% · 中间价 '+fmt(q?.mid,2)+(q?.quote_time?'\n报价时间 '+stampLabel(q.quote_time):'');}).join('\n')});
 }
 ['smile-call','smile-put','smile-expiry'].forEach(id=>$(id)?.addEventListener('change',()=>renderSmile(marketData?.smile)));
 
@@ -119,7 +120,7 @@ function renderResearch(){
  renderPhase();
  chart('residual-chart',[s('accumulated','累计残差',colors[0],100),{...s('upper','历史 95%',colors[1],100),dash:true},{...s('lower','历史 5%',colors[2],100),dash:true}],opts);
  chart('correlation-chart',[s('corr_return','涨跌幅',colors[0]),s('corr_level','价格水平',colors[1])],{...opts,yRange:[-1,1],legend:['涨跌幅相关性','价格水平相关性'],tooltip:x=>{const r=b[Math.round(x)];return stampLabel(r.timestamp)+'\n'+[['corr_return','涨跌幅'],['corr_level','价格水平']].map(([key,name])=>name+' '+fmt(displayValue(r,key))+(r[key+'_carried']?'（午休衔接沿用 '+stampLabel(r[key+'_origin'])+'）':'')).join('\n');}});
- chart('hv-chart',[s('hv','历史波动率',colors[0]),s('vix','MVIX',colors[1])],{...opts,legend:['历史波动率 %','MVIX 指数点']});
+ chart('hv-chart',[s('hv','历史波动率',colors[0]),{...s('vix','MVIX',colors[1]),right:true}],{...opts,dual:true,axisColors:[colors[0],colors[1]],legend:['历史波动率 %','MVIX 指数点']});
  chart('sensitivity-chart',[s('vanna','Vanna',colors[0]),{...s('volga','Volga',colors[1]),right:true}],{...opts,dual:true,legend:['Vanna · 左轴','Volga · 右轴']});
  chart('visits-chart',['上行进入','下行进入'].map((dir,i)=>({name:dir,color:colors[i],points:true,data:visits.filter(v=>v.direction===dir).map(v=>[v.index,v.vix])})),{...opts,legend:['上行进入','下行进入']});
  $('anchor-label').textContent=`锚点 ${fmt(d.anchor.price,4)} / 价格带 ${fmt(d.anchor.low,4)}–${fmt(d.anchor.high,4)}`;$('visit-count').textContent=visits.length+' 次回访';$('visits-body').replaceChildren();

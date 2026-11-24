@@ -1,6 +1,7 @@
 """Private JSON lines, rotated by Shanghai calendar day within one process."""
 import json
 import logging
+import sqlite3
 import os
 import time
 import traceback
@@ -48,6 +49,7 @@ class DailyLogHandler(logging.Handler):
                 data['details'] = record.event_fields
             if record.exc_info:
                 data['exception_type'] = record.exc_info[0].__name__
+                data.update(sqlite_fields(record.exc_info[1]))
                 data['stack'] = [dict(file=Path(f.filename).name, line=f.lineno, function=f.name)
                                  for f in traceback.extract_tb(record.exc_info[2])]
             self.stream.write(json.dumps(data, ensure_ascii=False, allow_nan=False, default=str) + '\n')
@@ -64,6 +66,12 @@ class DailyLogHandler(logging.Handler):
             super().close()
         finally:
             self.release()
+
+
+def sqlite_fields(error):
+    if isinstance(error,sqlite3.Error):
+        return dict(sqlite_code=getattr(error,'sqlite_errorcode',None),sqlite_name=getattr(error,'sqlite_errorname',None))
+    return {}
 
 
 def event(name, level=logging.INFO, **fields):

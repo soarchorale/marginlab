@@ -1,6 +1,6 @@
 """Replay saved MVIX evidence; only failed, time-verified snapshots may be repaired."""
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import math
@@ -42,12 +42,31 @@ def verified_evidence(stamp, details, rows):
     return at
 
 
-def replay(path, legacy_rate=None):
+def replay(path, legacy_rate=None, products=(), start=None, end=None):
     summary=defaultdict(Counter);changes=[];plans=[];rejections=Counter()
     created=datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True) as db:
         db.row_factory=sqlite3.Row;db.execute('BEGIN')
-        for saved in db.execute('SELECT * FROM tq_snapshots ORDER BY product,timestamp'):
+        conditions = []
+        params = []
+        if products:
+            placeholders = ','.join('?' for _ in products)
+            conditions.append(f'product IN ({placeholders})')
+            params.extend(products)
+        first = date.fromisoformat(start) if start else None
+        last = date.fromisoformat(end) if end else None
+        if first and last and first > last:
+            raise ValueError('Start must not follow end')
+        if first:
+            conditions.append('timestamp >= ?')
+            params.append(first.isoformat())
+        if last:
+            conditions.append('timestamp < ?')
+            params.append((last + timedelta(days=1)).isoformat())
+        query = 'SELECT * FROM tq_snapshots'
+        if conditions:
+            query += ' WHERE ' + ' AND '.join(conditions)
+        for saved in db.execute(query + ' ORDER BY product,timestamp', params):
             row=dict(saved);product=row['product'];quality=row['quality'];stats=summary[product]
             stats['total']+=1
             if quality not in ('valid','insufficient'):
@@ -76,7 +95,11 @@ def replay(path, legacy_rate=None):
                 raw_quotes_sha256=hashlib.sha256(row['quotes'].encode()).hexdigest(),
                 rate_basis='recorded' if 'rate' in details else 'explicit_legacy_assumption')
             plans.append((row,updated));stats['recoverable']+=1
+    fingerprint = hashlib.sha256()
+    for original,updated in plans:
+        fingerprint.update(json.dumps([original,updated['value']],sort_keys=True).encode())
     report=dict(method=METHOD,created_at=created,legacy_rate=legacy_rate,
+                scope=dict(products=sorted(set(products)),start=start,end=end),plan_sha256=fingerprint.hexdigest(),
                 products={k:dict(v) for k,v in summary.items()},rejection_reasons=dict(rejections),
                 valid_changes=changes,recovered=[dict(product=r['product'],timestamp=r['timestamp'],value=d['value'],
                     excluded_near=d['near']['excluded_strikes'],excluded_far=d['far']['excluded_strikes']) for r,d in plans])

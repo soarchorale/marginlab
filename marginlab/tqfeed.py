@@ -124,6 +124,7 @@ class Feed:
 
     def supervise(self):
         while not self.stop_event.is_set():
+            started=time.monotonic()
             try:
                 self.maintain()
                 if time.time()-self.last_health>=15:
@@ -131,8 +132,8 @@ class Feed:
                     publish(self);self.last_health=time.time()
                 self.maintenance.tick()
             except Exception as exc:
-                from .logging_setup import event
-                event('collector_scheduling_failed',40,error_type=type(exc).__name__)
+                from .logging_setup import event,sqlite_fields
+                event('collector_scheduling_failed',40,error_type=type(exc).__name__,duration_ms=round((time.monotonic()-started)*1000),**sqlite_fields(exc))
                 self.error = 'Collector scheduling failed ('+type(exc).__name__+')'
                 self.state = 'error'
             self.stop_event.wait(5)

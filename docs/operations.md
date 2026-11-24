@@ -105,7 +105,22 @@ Production keeps automatic collection enabled. Local development now uses the re
 
 The supervisor may still run local cleanup and coverage audits in replica mode. Its status describes the local replica, not the remote process. A local coverage gap never initiates provider backfill. No scheduled synchronization job is installed; repeat the explicit snapshot/import workflow when fresh local data is needed.
 
-Use `scripts/sync_market.py export --database /path/to/production.sqlite3 --output /path/to/snapshot.sqlite3 --months 1` on the source host. It reads one transaction snapshot and exports only four market tables plus a timestamp/count manifest; no accounts, passwords, sessions or collection leases are transferred. Transfer this private snapshot over SSH/SCP. Stop the local service, then run `python scripts/sync_market.py import --database instance/margin.sqlite3 --source /path/to/snapshot.sqlite3 --backup /path/to/local-before.sqlite3`. The importer checks integrity/schema/counts, backs up locally, replaces market tables transactionally and retains local authentication. It clears old local coverage/health/backfill-job metadata, enables replica mode, and sets one-month retention. Existing local-only market observations are preserved only in the backup; the imported remote snapshot is authoritative. The UI shows the snapshot export time.
+On the production host, export a consistent snapshot of the four market tables. Transfer the private export over SSH/SCP. It contains the export timestamp and table counts and excludes accounts, sessions and collector leases.
+
+```sh
+python scripts/sync_market.py export --database instance/margin.sqlite3 --output /path/to/market.sqlite3 --months 1
+```
+
+For routine development sync, stop the local preview and run these commands on the initialized local replica. Use a new backup path for each apply.
+
+```sh
+python scripts/sync_market.py merge --database instance/margin.sqlite3 --source /path/to/market.sqlite3
+python scripts/sync_market.py merge --database instance/margin.sqlite3 --source /path/to/market.sqlite3 --apply --backup /path/to/local-before.sqlite3
+```
+
+The first command previews new row counts, the first and last new timestamps, conflict counts and up to five example keys per table. Apply requires the persisted replica flag and an idle collector. It inserts missing keys in one transaction and keeps existing bars, quote evidence and snapshots on conflicts, including locally recovered values. Conflicting snapshots require a separate review even when the incoming quality is higher. Product status advances when its incoming quote time is newer. Repeating an export merge inserts zero additional observations. Triggers invalidate analysis revisions and coverage for changed days. The local retention policy still applies at service startup and during maintenance.
+
+For first-time initialization or intentional full replacement on a stopped local instance, use `python scripts/sync_market.py import --replace --database instance/margin.sqlite3 --source /path/to/market.sqlite3 --backup /path/to/local-before.sqlite3`. Replacement resets local market tables and coverage, health and backfill metadata. It retains local authentication, enables replica mode and sets one-month retention.
 
 One calendar month is the default retention. Existing databases with an explicit `history_months` setting keep that setting until changed. The November 17 configuration change sets it to `1` on production and the local replica. Production code and process are not redeployed or restarted for this setting; existing scheduled pruning applies it. This is a rolling calendar-month cutoff, not a fixed 30-day duration.
 
@@ -119,11 +134,18 @@ Replica coverage uses the export time as its upper bound and keeps the actual au
 
 This follows the ordering in Cboe Volatility Index Mathematics Methodology, section 3(a)(ii)–(iv): https://cdn.cboe.com/resources/indices/Cboe_Volatility_Index_Mathematics_Methodology.pdf. MVIX remains a local monthly-contract adaptation, not the official VIX benchmark. Changes in selected strikes can affect the index independently of changes in quoted prices; term details retain excluded strikes, reasons, selected strikes and method version.
 
-For an offline audit, run `python scripts/repair_saved_mvix.py --database /path/to/local.sqlite3 --legacy-rate 0.02 --report /path/to/audit.json`. The legacy rate is an explicit assumption for old failed snapshots that did not record it; future snapshots record their configured rate even on failure. Inspect unchanged/changed valid results and unresolved causes before applying. Add `--apply --backup /path/to/before.sqlite3` with a new report filename to repair eligible failed snapshots transactionally after a consistent backup. A changed input row aborts the transaction.
+For a scoped offline audit, use inclusive Shanghai dates and one or more products. The example supplies the 2% legacy rate only for rows lacking a recorded rate. Inspect recovered keys, audit totals and rejection reasons before applying.
+
+```sh
+python scripts/repair_saved_mvix.py --database instance/margin.sqlite3 --product 300 --product 1000 --start 2026-11-17 --end 2026-11-17 --legacy-rate 0.02 --report /path/to/preview.json
+python scripts/repair_saved_mvix.py --database instance/margin.sqlite3 --product 300 --product 1000 --start 2026-11-17 --end 2026-11-17 --legacy-rate 0.02 --preview-report /path/to/preview.json --apply --backup /path/to/before.sqlite3 --report /path/to/applied.json
+```
+
+Apply checks the scope, method, rate, recovered entries and hash of the candidate rows against the preview. It creates a consistent backup, checks each original row again under the write transaction and aborts if it changed. Use new filenames and repeat the first command with a fresh report path to verify zero remaining candidates. An unscoped audit is available for inspection.
 
 The repair never changes raw quote JSON, existing valid results or authorized reference estimates. Repaired rows keep the prior failure details, quote hash, rate provenance and new method version. Missing entire minutes are not fabricated. Expired, future, cross-session, stale-heartbeat and masked-timestamp observations are excluded from repair. Repeated repair is idempotent. Chart tooltips identify reconstructed observations.
 
-Local testing applies these derived repairs only to a remote-sourced local replica. Production code/history require separate release approval. A later authoritative remote sync replaces local market rows, including locally repaired results; rerun the audited repair after synchronization until the approved method and historical repair are deployed to production.
+Use a remote-sourced replica or disposable copy for rehearsals. A production release and a production data repair are separate operator actions. Routine incremental merges preserve local derived repairs.
 
 ## Daily application logs
 
@@ -148,3 +170,9 @@ The default live research range is seven Shanghai calendar dates, including the 
 The dashboard keeps the latest selected-product quote timestamp in its heading, removes the four-product spot cards and operational prose, and retains data-quality provenance in chart tooltips. The settings page only edits the legacy daily-cache refresh interval; research polling remains 15 seconds. Retention submissions are rejected server-side. Set MARGIN_HISTORY_MONTHS at deployment to override the persisted retention setting; absent that override, existing installations retain their stored policy (default one month).
 
 Research results remain in the bounded, version-keyed process cache for up to 300 seconds. Market revisions invalidate results immediately. Page navigation still makes an authenticated request and rebuilds charts; there is no browser-persisted research cache. A loading indicator appears only after 350 milliseconds. Research JSON uses gzip when accepted; login/settings responses are not compressed by this hook. Local November 17 baseline: about 0.46 seconds cold and 0.11 seconds warm, with a 6.1 MB uncompressed one-month payload. These are local measurements, not remote concurrency guarantees.
+
+## Comparing supervisor and log progress
+
+Run `python scripts/check_log_progress.py --database instance/margin.sqlite3` on the service host. Supply `--log-dir` if the daily logs are elsewhere. This on-demand command reads SQLite and the daily files independently of Flask and writes JSON to stdout. A nonzero exit indicates stale progress or a read failure. It checks every product's supervisor heartbeat (60 seconds) and its latest collector health event (15 minutes), including records across Shanghai midnight. An HTTP request logged in the meantime cannot mask a missing collector log. The check remains meaningful during lunch and weekends because the supervisor reports even without trades. Quote quality and provider coverage are separate checks.
+
+For a maintenance failure, correlate the Shanghai timestamp, process and thread with nearby HTTP status and duration. SQLite exceptions include their numeric result code and symbolic name when available. Scheduler and maintenance failures include elapsed milliseconds. A long writer transaction can block a due session-activity update until its busy timeout. Schedule bulk work offline or in a quiet window. Revocation and session expiry continue to be checked on requests.

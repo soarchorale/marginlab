@@ -97,7 +97,7 @@ On `/chips`, select a futures product and move the playback cursor or press Play
 
 ## Method notes, settings and access
 
-- **Method notes (`/method`):** a reference page for drift definitions, data conventions and limitations. Some notes describe the older ETF/QVIX workflow. The active index dashboard uses TqSdk history, spot indices and locally calculated MVIX as described above.
+- **Method notes (`/method`):** explains same-price revisits, cumulative residuals, spot-index alignment, quote-derived MVIX, display-only closing-auction carries, retention and the assumptions behind the model sensitivities.
 - **Settings (`/settings`):** the saved-data table lists series, frequency, row count and first/last timestamps. A snapshot row is not necessarily a valid MVIX. The editable refresh interval applies to the legacy daily cache. It does not set the live dashboard's 15-second visible-page polling interval or the deployment-owned retention period.
 - **Login and logout:** sign in to read protected pages and APIs. Production collection runs independently of browser sessions. Closing the browser or logging out does not stop the production collector.
 - **Retired tools:** market screening and ranking are hidden from navigation; their old live endpoints are retired. The active playback page uses stored futures bars, not the retained simulated frame generator.

@@ -75,6 +75,26 @@ class RepairTests(unittest.TestCase):
         with connect(backup) as db:self.assertEqual([tuple(r) for r in db.execute('SELECT * FROM tq_snapshots ORDER BY product')],before)
         self.assertEqual(replay(self.path)[1],[])
 
+    def test_cli_rejects_scope_or_evidence_changed_after_preview(self):
+        import subprocess
+        import sys
+        self.save('300')
+        self.save('1000')
+        base = Path(self.path).parent
+        cmd = [sys.executable, 'scripts/repair_saved_mvix.py', '--database', self.path,
+               '--start', '2026-11-17', '--end', '2026-11-17', '--product', '300']
+        preview = base / 'preview.json'
+        subprocess.run(cmd + ['--report', str(preview)], check=True, capture_output=True)
+        self.assertEqual([r['product'] for r in json.loads(preview.read_text())['recovered']], ['300'])
+        apply = ['--apply', '--preview-report', str(preview), '--backup', str(base / 'before.db'),
+                 '--report', str(base / 'apply.json')]
+        self.assertNotEqual(subprocess.run(cmd + ['--product','1000'] + apply, capture_output=True).returncode, 0)
+        with connect(self.path) as db:
+            db.execute("UPDATE tq_snapshots SET quotes=quotes||' ' WHERE product='300'")
+        self.assertNotEqual(subprocess.run(cmd + apply, capture_output=True).returncode, 0)
+        self.assertFalse((base / 'before.db').exists())
+        self.assertFalse((base / 'apply.json').exists())
+
     def test_time_invalid_and_unknown_rate_are_not_repaired(self):
         cases=[dict(unusable_timestamps=1),dict(market_heartbeat_epoch=self.at-90),dict(evidence_verified=False)]
         for i,extra in enumerate(cases):self.save(str(i),dict(self.details,**extra))

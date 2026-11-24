@@ -97,6 +97,7 @@ class Maintenance:
         self.last_check=0;self.last_cleanup=0;self.error=None;self.last_phase=None
 
     def tick(self,now=None):
+        started=time.monotonic()
         from .cache import cutoff_for,settings
         now=now or datetime.now(ZONE);epoch=now.timestamp()
         final_transition=phase(now)=='closed' and now.hour*60+now.minute>=910 and self.last_phase!='final'
@@ -129,8 +130,8 @@ class Maintenance:
                 if cutoff<=day<=today:audit_day(self.path,day,now,asof=asof)
             self.last_check=epoch;self.last_phase='final' if phase(now)=='closed' and now.hour*60+now.minute>=910 else phase(now);self.error=None
         except Exception as exc:
-            from .logging_setup import event
-            event('maintenance_failed', 40, error_type=type(exc).__name__)
+            from .logging_setup import event,sqlite_fields
+            event('maintenance_failed', 40, error_type=type(exc).__name__,duration_ms=round((time.monotonic()-started)*1000),**sqlite_fields(exc))
             self.error='Maintenance failed ('+type(exc).__name__+')'
             self.last_check=epoch
         finally:

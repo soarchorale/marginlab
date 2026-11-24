@@ -1,5 +1,7 @@
 # marginlab
 
+See the [chart and module guide](docs/guide.md) for dashboard controls, chart interpretation, pricing scenarios and volume playback.
+
 A private options research workbench using Flask, NumPy/Pandas, SQLite, and native SVG charts. It combines index futures monitoring, quote-based MVIX, volatility drift research, option pricing/stress tests, and a neutral minute-volume profile. It does not place orders.
 
 In the examples below, `/path/to/marginlab` represents your local checkout; replace it with the actual project directory. The project and Python package are both named `marginlab`. Scripts derive default resource paths from their own location, not from the caller working directory. Explicit relative CLI arguments remain caller-relative.

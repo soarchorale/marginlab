@@ -1,5 +1,7 @@
 # Language and workspace conventions
 
+When adding, changing or removing a user-facing module, chart, control, data source or calculation, update the corresponding section of `docs/guide.md` in the same change. Verify axes, units, defaults, missing-data behavior and examples against the implementation.
+
 The local project root is `/path/to/marginlab`. Resolve runtime paths from `__file__` or explicit CLI arguments, not from the caller working directory. Keep documentation, source comments, docstrings, CLI prompts, and application-owned logs in English. Preserve Chinese browser copy, UI state labels, and upstream field names required by provider schemas. Do not rewrite private historical databases or third-party source files merely to translate text.
 
 ## November 17 current iteration

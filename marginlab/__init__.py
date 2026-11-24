@@ -144,11 +144,6 @@ def create_app(config=None):
             raise ValueError('Unknown data source')
         cfg = DriftConfig(window=number(args,'window',60,20,500,True), horizon=number(args,'horizon',16,2,100,True), correlation=number(args,'correlation',30,5,250,True), band=number(args,'band',.25,.05,.9), gap=number(args,'gap',4,1,100,True), lookback_days=number(args,'lookback_days',5,1,250,True))
         result = analyze(df,cfg,252 if period=='daily' else 252*240/int(period))
-        # Fixed-maturity proxy diagnostic, never presented as contract-specific IV.
-        strike = float(df.close.iloc[0])
-        sensitivities = [greeks(S=float(row.close), K=strike, sigma=float(row.vix)/100) for row in df.itertuples()]
-        for key in ['vanna', 'volga']:
-            result['bars'][key] = [g[key] for g in sensitivities]
         return jsonify(bars=records(result['bars']), visits=result['visits'], anchor=result['anchor'], meta=dict(symbol=symbol,name=SYMBOLS[symbol][0],period=period,source=source,count=len(df),asof=str(df.timestamp.iloc[-1]),settings=cfg.__dict__,cache=cache_info,notes=['同价位差未做带内价格响应修正；未控制事件、期限结构、日内季节性。','残差为同步异常检测，非预测或交易指令。','回访阈值未按间隔分层；异常标签仅为研究候选。']))
 
     @app.get('/option/greek')

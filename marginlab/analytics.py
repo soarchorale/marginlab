@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
+from .pricing import greeks
 
 
 @dataclass(frozen=True)
@@ -97,4 +98,9 @@ def analyze(df, cfg=DriftConfig(), bars_per_year=252 * 16):
             away, last_visit = False, i
         prev_inside = inside
     out = df.assign(corr_level=level, corr_return=returns, hv=hv, residual=residual, expected=expected, accumulated=accumulated, upper=upper, lower=lower, drift=drift, state=states)
+    strike = float(p.iloc[0])
+    sensitivities = [greeks(S=spot, K=strike, sigma=vol/100) if np.isfinite(vol) and vol > 0 else {}
+                     for spot, vol in zip(p, v)]
+    for key in ('vanna', 'volga'):
+        out[key] = [row.get(key, np.nan) for row in sensitivities]
     return dict(bars=out, visits=visits, anchor=dict(price=anchor, atr=width, low=anchor-cfg.band*width, high=anchor+cfg.band*width, index=anchor_idx))

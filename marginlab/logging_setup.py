@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from flask import g, request
 
 ZONE = ZoneInfo('Asia/Shanghai')
+EVENT_LOGGER = logging.getLogger('marginlab')
 
 
 class DailyLogHandler(logging.Handler):
@@ -66,7 +67,7 @@ class DailyLogHandler(logging.Handler):
 
 
 def event(name, level=logging.INFO, **fields):
-    logging.getLogger('marginlab').log(level, name, extra={'event_fields': fields})
+    EVENT_LOGGER.log(level, name, extra={'event_fields': fields})
 
 
 def configure(app):
@@ -80,15 +81,14 @@ def configure(app):
     handler = next((h for h in app.logger.handlers if isinstance(h, DailyLogHandler)
                     and h.directory == directory.resolve() and h.days == days), None)
     handler = handler or DailyLogHandler(directory, days)
-    for name in ('marginlab', 'werkzeug', 'waitress'):
-        logger = logging.getLogger(name)
+    for logger in dict.fromkeys((EVENT_LOGGER, app.logger, logging.getLogger('werkzeug'), logging.getLogger('waitress'))):
         for old in list(logger.handlers):
             logger.removeHandler(old)
             if isinstance(old, DailyLogHandler) and old is not handler:
                 old.close()
         logger.addHandler(handler)
         logger.propagate = False
-        logger.setLevel(logging.WARNING if name == 'werkzeug' else logging.INFO)
+        logger.setLevel(logging.WARNING if logger.name == 'werkzeug' else logging.INFO)
     app.extensions['daily_log_handler'] = handler
 
     @app.before_request

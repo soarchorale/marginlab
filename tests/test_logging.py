@@ -6,8 +6,9 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 from flask import Flask
-from marginlab.logging_setup import DailyLogHandler, configure
+from marginlab.logging_setup import DailyLogHandler, configure, event
 
 
 class LoggingTests(unittest.TestCase):
@@ -53,11 +54,14 @@ class LoggingTests(unittest.TestCase):
                 @app.get('/failure')
                 def failure():raise RuntimeError('secret_exception_value')
                 client=app.test_client()
-                client.get('/probe?password=secret_query',headers={'Authorization':'secret_header'})
+                with patch.object(logging.Logger, 'manager', logging.Manager(logging.root)):
+                    event('collector_health', product='50')
+                    client.get('/probe?password=secret_query',headers={'Authorization':'secret_header'})
                 client.get('/failure')
                 text=next(Path(directory).glob('*.log')).read_text()
                 self.assertNotIn('secret_',text)
                 rows=[json.loads(line) for line in text.splitlines()]
+                self.assertTrue(any(r['event']=='collector_health' and r['details']['product']=='50' for r in rows))
                 requests=[r for r in rows if r['event']=='http_request']
                 self.assertEqual(len(requests),2)
                 self.assertEqual(requests[0]['details']['route'],'/probe')

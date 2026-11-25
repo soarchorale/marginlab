@@ -240,6 +240,7 @@ src/harbor/viewer/static/
 
 # Private runtime data: administrator hashes, sessions and market history
 /tqauth.json
+/feishu.json
 instance/
 *.sqlite3
 *.sqlite3-wal

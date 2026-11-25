@@ -107,3 +107,7 @@ Use `python deploy/release.py --build-only` to test and package the current work
 
 
 Dashboard navigation reuses version-keyed analysis results (five-minute maximum lifetime), and research JSON supports gzip transport. Only the latest selected-product quote timestamp is shown above the controls. Administrator settings expose the daily-cache refresh interval; retention is deployment-owned via MARGIN_HISTORY_MONTHS or the existing stored policy, and session/security implementation notes are documented here rather than displayed on that page.
+
+### Feishu volatility alerts
+
+Run `python scripts/monitor_signals.py --once --preview` to replay retained market observations and inspect a signal card locally. The optional production monitor runs independently of web requests and defaults to observation-only mode. See [signal interpretation](docs/guide.md#feishu-minute-alerts) and [monitor operations](docs/operations.md#feishu-signal-monitor).

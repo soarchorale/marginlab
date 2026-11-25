@@ -42,12 +42,9 @@ def validate_bars(frame, min_records=20):
     return df.sort_values('timestamp').reset_index(drop=True)
 
 
-def analyze(df, cfg=DriftConfig(), bars_per_year=252 * 16):
-    df = df.copy().reset_index(drop=True)
+def rolling_metrics(df, cfg, bars_per_year):
     p, v = df.close, df.vix
     r, q = np.log(p).diff(), np.log(v).diff()
-    tr = pd.concat([df.high-df.low, (df.high-p.shift()).abs(), (df.low-p.shift()).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(cfg.atr_window).mean()
     level = p.rolling(cfg.correlation).corr(v).clip(-1, 1)
     returns = r.rolling(cfg.correlation).corr(q).clip(-1, 1)
     hv = r.rolling(cfg.correlation).std() * np.sqrt(bars_per_year) * 100
@@ -68,6 +65,13 @@ def analyze(df, cfg=DriftConfig(), bars_per_year=252 * 16):
     down = (accumulated < lower - 1e-10).rolling(cfg.persistence).sum() == cfg.persistence
     states = np.where(up, '异常升波', np.where(down, '异常降波', np.where(upper.isna(), '样本积累中', '常态区间')))
 
+    return df.assign(corr_level=level, corr_return=returns, hv=hv, residual=residual, expected=expected, accumulated=accumulated, upper=upper, lower=lower, state=states)
+
+
+def price_visits(df, cfg, *, reset_on_gap=False):
+    p, v = df.close, df.vix
+    tr = pd.concat([df.high-df.low, (df.high-p.shift()).abs(), (df.low-p.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(cfg.atr_window).mean()
     # One fixed anchor, known at the first ATR-ready bar; never chosen retrospectively.
     anchor_idx = cfg.atr_window - 1
     anchor, width = float(p.iloc[anchor_idx]), float(atr.iloc[anchor_idx])
@@ -76,6 +80,9 @@ def analyze(df, cfg=DriftConfig(), bars_per_year=252 * 16):
     trading_days = list(dict.fromkeys(df.timestamp.dt.date))
     day_rank = {d: i for i, d in enumerate(trading_days)}
     for i in range(anchor_idx + 1, len(df)):
+        if reset_on_gap and (not np.isfinite(p.iloc[i]) or not np.isfinite(v.iloc[i])):
+            away, prev_inside = False, True
+            continue
         distance = float(p.iloc[i] - anchor)
         inside = abs(distance) <= cfg.band * width
         if abs(distance) >= cfg.excursion * width:
@@ -97,10 +104,18 @@ def analyze(df, cfg=DriftConfig(), bars_per_year=252 * 16):
             visits.append(dict(index=i, timestamp=str(df.timestamp.iloc[i]), price=float(p.iloc[i]), vix=float(v.iloc[i]), direction=direction, matches=len(matches), drift=value, state=state))
             away, last_visit = False, i
         prev_inside = inside
-    out = df.assign(corr_level=level, corr_return=returns, hv=hv, residual=residual, expected=expected, accumulated=accumulated, upper=upper, lower=lower, drift=drift, state=states)
+    return visits, drift, dict(price=anchor, atr=width, low=anchor-cfg.band*width, high=anchor+cfg.band*width, index=anchor_idx)
+
+
+def analyze(df, cfg=DriftConfig(), bars_per_year=252 * 16):
+    df = df.copy().reset_index(drop=True)
+    out = rolling_metrics(df, cfg, bars_per_year)
+    visits, drift, anchor = price_visits(df, cfg)
+    out['drift'] = drift
+    p, v = df.close, df.vix
     strike = float(p.iloc[0])
     sensitivities = [greeks(S=spot, K=strike, sigma=vol/100) if np.isfinite(vol) and vol > 0 else {}
                      for spot, vol in zip(p, v)]
     for key in ('vanna', 'volga'):
         out[key] = [row.get(key, np.nan) for row in sensitivities]
-    return dict(bars=out, visits=visits, anchor=dict(price=anchor, atr=width, low=anchor-cfg.band*width, high=anchor+cfg.band*width, index=anchor_idx))
+    return dict(bars=out, visits=visits, anchor=anchor)

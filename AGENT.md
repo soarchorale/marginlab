@@ -47,7 +47,7 @@ Its active areas are:
 - Chip playback: simulated transaction distributions, time layers, moving averages, and playback controls.
 - Administration: login, sessions, and adjustable historical market-data retention and refresh settings.
 
-Market screening and rankings are intentionally hidden from navigation, but their implementation is retained. The application does not place orders or send external messages. Research labels are descriptive hypotheses, not validated trading recommendations.
+Market screening and rankings are intentionally hidden from navigation, but their implementation is retained. The application does not place orders. The optional standalone Feishu signal monitor sends minute-close cards only when explicitly launched in production delivery mode. See docs/operations.md. Research labels are descriptive hypotheses, not validated trading recommendations.
 
 ## Runtime and commands
 

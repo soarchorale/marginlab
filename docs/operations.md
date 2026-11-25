@@ -176,3 +176,43 @@ Research results remain in the bounded, version-keyed process cache for up to 30
 Run `python scripts/check_log_progress.py --database instance/margin.sqlite3` on the service host. Supply `--log-dir` if the daily logs are elsewhere. This on-demand command reads SQLite and the daily files independently of Flask and writes JSON to stdout. A nonzero exit indicates stale progress or a read failure. It checks every product's supervisor heartbeat (60 seconds) and its latest collector health event (15 minutes), including records across Shanghai midnight. An HTTP request logged in the meantime cannot mask a missing collector log. The check remains meaningful during lunch and weekends because the supervisor reports even without trades. Quote quality and provider coverage are separate checks.
 
 For a maintenance failure, correlate the Shanghai timestamp, process and thread with nearby HTTP status and duration. SQLite exceptions include their numeric result code and symbolic name when available. Scheduler and maintenance failures include elapsed milliseconds. A long writer transaction can block a due session-activity update until its busy timeout. Schedule bulk work offline or in a quiet window. Revocation and session expiry continue to be checked on requests.
+
+## Feishu signal monitor
+
+Run one optional signal process alongside the existing web/collector process. Both can use the same service account. Only the collector writes market data. The monitor opens the market database with SQLite mode=ro, has its own WAL database and exclusive process lock, and does not import the web application factory or subscribe to the provider. A dedicated thread delivers cards; no network call holds a database transaction. Existing web start/release commands do not automatically enable the monitor.
+
+**Observe locally or on production.** From the project root, use the same Python environment as the service. Observation is the default, even if a webhook is present in the environment.
+
+```sh
+python scripts/monitor_signals.py --once --preview
+nohup python -u scripts/monitor_signals.py </dev/null >/dev/null 2>&1 &
+```
+
+The first command records historical signals and prints the latest card JSON. The second keeps observing. Use only one process per state path. To compare fresh replays, supply a separate `--state /private/path/replay.sqlite3`. Use `--market` to select the actual market database when it is outside the default instance directory. The monitor starts with at most 31 days of available market history. It verifies the current endpoint every second, waiting up to 30 seconds for two separate market writes. Unavailable inputs enter the timeline as gaps. Weekend and lunch minutes are excluded. Missing entire days without trading evidence are skipped. There is no exchange holiday calendar.
+
+**Enable delivery on production.** First stop the observation process with SIGTERM and wait for exit. The monitor loads the project-root `feishu.json` only in delivery mode. Store a JSON object with one string field named `webhook`, restrict the file to mode 0600, and provision it separately over SSH. Git and source release archives exclude the file. The `MARGIN_FEISHU_WEBHOOK` environment variable, when set, overrides it. The custom bot must allow the production server's outbound IP. The sender rejects replica mode, including the persisted market read-only flag.
+
+```bash
+nohup python -u scripts/monitor_signals.py --send </dev/null >/dev/null 2>&1 &
+echo $! > instance/signals.pid
+```
+
+On subsequent releases, stop the monitor before replacing source, then restart it with the intended environment and the existing signal database. A first live launch warms its state silently. Only transitions at boundaries after process start are eligible for new notifications. Already queued, unexpired deliveries survive process restart. Frozen observations preserve the inputs used for each decision; late repairs do not rewrite the original alert. An independent offline replay with a separate state database can be used for comparisons. Market replica export/import does not copy signal delivery state.
+
+**Delivery policy.** The checkpoint, normalized inputs, signal states and any outgoing card are committed together. The unique event covers the product, one-minute rule version and Shanghai minute end. Multiple transitions are grouped in the same immutable card. One signal database represents one webhook destination. Changing destinations requires draining or expiring pending messages first. The sender claims each card before the HTTP request, checks both HTTP status and Feishu's business code, and retries a connection failure before transmission or an explicit rate rejection with bounded backoff. A read timeout, invalid response, server error or crash after claiming leaves delivery unknown and has no automatic retry. This can lose a notification; it avoids sending a second card after an unconfirmed acceptance. Pending cards expire 120 seconds after the market endpoint. An IP/permission rejection is recorded as failed. Credentials, request URLs and response bodies are excluded from logs.
+
+**Group notification limits and audit.** For one monitor, state database and destination, allow up to six accepted or possibly accepted cards in a rolling ten minutes, shared across products. Excess transitions remain available in the outbox as `suppressed/group_limit`; they are never queued again. Each card has at most three transport attempts, including its first attempt. A failed pre-transmission connection or explicit rate rejection can consume an attempt without consuming a group notification slot. A timeout after transmission consumes a slot. The counters survive restarts.
+
+Every new card is stored in `outbox` with its immutable JSON, event ID, timestamps and final disposition. Its `signal_triggers` children contain the rule, direction and numeric comparison evidence for each trigger. `delivery_attempts` records each network attempt, its start, finish, result and reason. A request interrupted by process death is marked unknown on restart; the recorded finish then means recovery time. Pre-upgrade cards retain their payload and aggregate attempt count. Missing historical attempt details are never inferred. Deleting expired outbox history also removes its child records.
+
+**Inspect operations.** The signal database defaults to `instance/signals.sqlite3`. The daily JSON logs in `instance/signal-logs/` report input lag, compute time, delivery outcome and time since queueing. Compare latencies on live minutes separately from initial warmup. `sent` means Feishu accepted the webhook; it does not confirm client display. State retention for observations/cards is one calendar month to preserve the monthly anchor and prior rolling inputs; market retention remains independently configured.
+
+```sh
+sqlite3 instance/signals.sqlite3 'SELECT product,endpoint,states FROM checkpoints;'
+sqlite3 instance/signals.sqlite3 'SELECT product,status,count(*) FROM outbox GROUP BY product,status;'
+sqlite3 instance/signals.sqlite3 'SELECT endpoint,product,status,reason FROM outbox ORDER BY endpoint DESC LIMIT 20;'
+sqlite3 instance/signals.sqlite3 'SELECT e.endpoint,e.product,t.rule,t.direction,t.evidence,e.status FROM outbox e JOIN signal_triggers t ON e.id=t.event_id ORDER BY e.endpoint DESC LIMIT 20;'
+sqlite3 instance/signals.sqlite3 'SELECT event_id,attempt,started,finished,outcome,reason FROM delivery_attempts ORDER BY started DESC LIMIT 20;'
+```
+
+The monitor follows the [Feishu custom bot protocol](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot) and [card JSON 2.0 structure](https://open.feishu.cn/document/feishu-cards/card-json-v2-structure).

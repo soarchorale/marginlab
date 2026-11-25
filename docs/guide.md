@@ -105,3 +105,13 @@ On `/chips`, select a futures product and move the playback cursor or press Play
 - **Retired tools:** market screening and ranking are hidden from navigation; their old live endpoints are retired. The active playback page uses stored futures bars, not the retained simulated frame generator.
 
 For collection, coverage checks, logs and replica synchronization, see [Operations](operations.md). For release and recovery procedures, see [Deployment](deployment.md). For documented historical gaps and outstanding work, see [Known issues](known-issues.md).
+
+## Feishu minute alerts
+
+The optional background monitor evaluates SSE 50/HO, CSI 300/IO and CSI 1000/MO. Its one-minute rule version is fixed independently of the page controls. It uses the same rolling fit, thresholds and visit comparison as the charts. Only original continuous-session MVIX observations with a verified index heartbeat and a completed, time-aligned spot bar are eligible. Reference estimates, historical repairs and display carries do not enter the monitor's sample. Expect differences from a dashboard selection that includes these data or uses a different anchor.
+
+- A residual card appears on entry to an abnormal state: the 16-bar cumulative residual has breached its prior rolling 95th or 5th percentile on three consecutive bars. It shows the measured residual and comparison threshold in log-change units multiplied by 100.
+- A revisit card requires two successive same-side abnormal visits on the same approach direction. The anchor is fixed at the end of the first available 14 consecutive spot bars in each Shanghai calendar month. An input gap requires another observable excursion before a visit. The comparison uses at least two same-direction visits within five observed trading dates and at least 30 earlier valid same-direction drift values in the anchor period to estimate thresholds. Sparse visits can leave this alert silent for the entire month.
+- A card combines transitions at the same product and minute. The header gives the minute **end** in Shanghai time. Orange marks rising volatility, blue falling volatility and grey mixed evidence. The first line compares MVIX with spot; the body shows the rule and comparison. The optional 16-bar changes are percentages, and the correlation is the 30-bar return correlation. A rising or falling label describes option pricing at observation time.
+
+See [monitor operations](operations.md#feishu-signal-monitor) for observation mode, delivery, and recovery.

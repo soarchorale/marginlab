@@ -107,7 +107,7 @@ class ResearchTests(unittest.TestCase):
 
     def test_api_contracts_and_errors(self):
         c=self.client()
-        for path in ['/','/chips','/api/research','/api/stress','/option/greek?type=put']:
+        for path in ['/volatility','/chips','/api/research','/api/stress','/option/greek?type=put']:
             self.assertEqual(c.get(path).status_code,200,path)
         for body in [dict(window=0),dict(horizon='NaN'),dict(source='bad'),dict(source='csv',csv='bad'),dict(source='live',symbol='unsupported',period='15')]:
             self.assertEqual(c.post('/api/research',json=body).status_code,400)

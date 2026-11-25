@@ -16,7 +16,7 @@ class AuthTests(unittest.TestCase):
 
     def test_all_private_routes_require_login_without_calling_provider(self):
         with patch('marginlab.data.live') as provider:
-            for path in ['/','/pricing','/chips','/settings','/method']:
+            for path in ['/','/volatility','/pricing','/chips','/settings','/method']:
                 self.assertEqual(self.client.get(path).status_code,302,path)
             for path in ['/api/research','/api/stress','/api/frame','/api/regenerate','/api/options/value','/option/greek','/future/hv','/hdoption/rank']:
                 response=self.client.post(path,json={}) if path in ['/api/frame','/api/regenerate'] else self.client.get(path)
@@ -59,7 +59,7 @@ class AuthTests(unittest.TestCase):
 
     def test_routes_render_only_active_module_and_no_market_link(self):
         login(self.client)
-        for path,identifier in [('/','research-form'),('/pricing','pricing-form'),('/chips','cfgWindow')]:
+        for path,identifier in [('/volatility','research-form'),('/pricing','pricing-form'),('/chips','cfgWindow')]:
             result=self.client.get(path)
             html=result.get_data(as_text=True)
             self.assertEqual(result.status_code,200)
@@ -68,7 +68,10 @@ class AuthTests(unittest.TestCase):
             self.assertNotIn('data-view=',html)
             self.assertIn('no-store',result.headers['Cache-Control'])
         self.assertNotIn('research-form',self.client.get('/pricing').get_data(as_text=True))
-        self.assertNotIn('pricing-form',self.client.get('/').get_data(as_text=True))
+        self.assertEqual(self.client.get('/').location, '/volatility')
+        for removed in ('/price', '/research'):
+            self.assertEqual(self.client.get(removed).status_code, 404)
+        self.assertNotIn('pricing-form',self.client.get('/volatility').get_data(as_text=True))
         self.assertEqual(self.client.get('/api/research?source=live&period=daily').status_code,405)
 
     def test_safe_next_secure_cookie_and_password_change(self):

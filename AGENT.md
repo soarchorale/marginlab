@@ -103,7 +103,7 @@ Each major area has its own server-rendered route. Opening pricing must not init
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Volatility research |
+| `/volatility` (home redirects here) | Volatility research |
 | `/pricing` | Pricing and stress testing |
 | `/chips` | Chip playback |
 | `/method` | Indicator explanations |

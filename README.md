@@ -83,7 +83,7 @@ Use `scripts/backup_sqlite.py` rather than copying a live WAL database's main fi
 | `templates/`, `static/` | Chinese browser copy and frontend assets |
 | `scripts/`, `deploy/`, `tests/` | Deployment, diagnostics, and isolated tests |
 
-Routes: `/`, `/pricing`, `/chips`, `/method`, `/settings`, `/login`, and POST `/logout`. Live research uses authenticated POST `/api/research`; volume profiles use POST `/api/chips`. Pricing APIs include `/api/greeks` and `/api/stress`. Hidden legacy code remains available in the repository.
+The home page redirects to `/volatility`. Pricing is available at `/pricing`. Other routes include `/chips`, `/method`, `/settings`, `/login`, and POST `/logout`. Live research uses authenticated POST `/api/research`; volume profiles use POST `/api/chips`. Pricing APIs include `/api/greeks` and `/api/stress`. Hidden legacy code remains available in the repository.
 
 ## Verify and release
 

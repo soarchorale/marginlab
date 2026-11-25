@@ -1,6 +1,6 @@
 'use strict';
 (()=>{
-const $=id=>document.getElementById(id),NS='http://www.w3.org/2000/svg';let bars=[],playing=false,loading=false,version=0;
+const $=id=>document.getElementById(id),NS='http://www.w3.org/2000/svg';let bars=[],playing=false,request=null;
 function add(svg,tag,a={},t){const e=document.createElementNS(NS,tag);Object.entries(a).forEach(([k,v])=>e.setAttribute(k,v));if(t!=null)e.textContent=t;svg.append(e);return e;}
 function canvas(id){const box=$(id);box.replaceChildren();const w=Math.max(300,box.clientWidth),h=box.clientHeight;return {svg:add(box,'svg',{viewBox:`0 0 ${w} ${h}`,role:'img','aria-label':id}),w,h};}
 function draw(){
@@ -19,13 +19,63 @@ function draw(){
  add(c.svg,'text',{x:55,y:c.h-8},'0');add(c.svg,'text',{x:c.w-20,y:c.h-8,'text-anchor':'end'},Math.round(max));
  $('chip-note').textContent='窗口成交量 '+selected.reduce((s,r)=>s+r.volume,0).toLocaleString()+'。分钟成交量按收盘价归集，仅供观察成交集中区域；不代表真实逐笔筹码或持仓成本。';
 }
-async function load(e){e?.preventDefault();if(loading)return;loading=true;$('chip-refresh').disabled=true;const id=++version;
- try{const res=await window.marginFetch('/api/chips',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:$('chip-symbol').value})});const d=await res.json();if(!res.ok)throw Error(d.error);if(id!==version)return;const oldEnd=Number($('chip-position').value)>=bars.length-1;bars=d.bars;$('chip-position').max=Math.max(0,bars.length-1);if(oldEnd)$('chip-position').value=Math.max(0,bars.length-1);$('chip-title').textContent=d.status.contract||'正在解析主力合约';$('chip-status').textContent=(d.collector.error||'TqSdk · '+d.collector.state)+' · 最新行情 '+(d.status.quote_time||'等待首次订阅')+'。'+d.note;if(bars.length)draw();else{$('chip-price').textContent='等待分钟行情…';$('chip-profile').textContent='暂无分布';}}
- catch(error){$('chip-status').textContent=error.message;}
- finally{loading=false;$('chip-refresh').disabled=false;}
+async function load(e){
+ e?.preventDefault();
+ if(request)return;
+ const current=new AbortController();
+ const symbol=$('chip-symbol').value;
+ request=current;
+ $('chip-refresh').disabled=true;
+ try{
+  const res=await window.marginFetch('/api/chips',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({symbol}),signal:current.signal
+  });
+  const d=await res.json();
+  if(request!==current)return;
+  if(!res.ok)throw Error(d.error);
+  const oldEnd=Number($('chip-position').value)>=bars.length-1;
+  bars=d.bars;
+  $('chip-position').max=Math.max(0,bars.length-1);
+  if(oldEnd)$('chip-position').value=$('chip-position').max;
+  $('chip-play').disabled=$('chip-position').disabled=!bars.length;
+  $('chip-title').textContent=d.status.contract||'正在解析主力合约';
+  $('chip-status').textContent=(d.collector.error||'TqSdk · '+d.collector.state)+' · 最新行情 '+(d.status.quote_time||'等待首次订阅')+'。'+d.note;
+  if(bars.length)draw();
+  else{
+   playing=false;
+   $('chip-play').textContent='播放';
+   $('chip-time').textContent='—';
+   $('chip-note').textContent='';
+   $('chip-price').textContent='等待分钟行情…';
+   $('chip-profile').textContent='暂无分布';
+  }
+ }catch(error){
+  if(request===current)$('chip-status').textContent=error.message;
+ }finally{
+  if(request===current){
+   request=null;
+   $('chip-refresh').disabled=false;
+  }
+ }
 }
 $('chip-form').addEventListener('submit',load);$('chip-position').addEventListener('input',draw);['cfgBins','cfgWindow','chip-ma'].forEach(id=>$(id).addEventListener('change',draw));
-$('chip-symbol').addEventListener('change',()=>{bars=[];playing=false;$('chip-play').textContent='播放';load();});
+$('chip-symbol').addEventListener('change',()=>{
+ request?.abort();
+ request=null;
+ bars=[];
+ playing=false;
+ $('chip-play').textContent='播放';
+ $('chip-position').max=$('chip-position').value=0;
+ $('chip-play').disabled=$('chip-position').disabled=true;
+ $('chip-time').textContent='—';
+ $('chip-note').textContent='';
+ $('chip-title').textContent='期货价格与均线';
+ $('chip-price').replaceChildren();
+ $('chip-profile').replaceChildren();
+ $('chip-status').textContent='正在加载'+$('chip-symbol').selectedOptions[0].textContent+'行情…';
+ load();
+});
 $('chip-play').addEventListener('click',()=>{playing=!playing;$('chip-play').textContent=playing?'暂停':'播放';if(playing&&Number($('chip-position').value)>=bars.length-1)$('chip-position').value=0;});
 setInterval(()=>{if(playing&&bars.length&&!document.hidden){$('chip-position').value=Math.min(bars.length-1,Number($('chip-position').value)+1);draw();if(Number($('chip-position').value)>=bars.length-1){playing=false;$('chip-play').textContent='播放';}}},150);
 setInterval(()=>{if(!document.hidden&&!playing)load();},15000);window.addEventListener('resize',draw);load();

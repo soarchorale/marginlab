@@ -52,6 +52,73 @@ function chart(id,series,options={}){
 
 function displayValue(row,key){return Object.hasOwn(row,key+'_display')?row[key+'_display']:row[key];}
 function carryNote(row){const kind=row.vix_display_kind;const recovery=row.vix_recovered?'\n原始报价重算 · '+(row.vix_method||'')+' · 近/次月剔除空报价执行价 '+row.vix_excluded_strikes+' 项':'';return recovery+(kind==='closing_auction_carry'?'\n集合竞价沿用 · 来源 '+stampLabel(row.vix_origin):kind==='lunch_carry'?'\n午休衔接沿用 · 来源 '+stampLabel(row.vix_origin):'');}
+let smileScope=null, smileTimes=[], pinnedSmile=null, visibleSmile=null;
+let smileTimer=null, smileRequest=null;
+
+function cancelSmileRequest(){
+ clearTimeout(smileTimer);
+ smileRequest?.abort();
+ smileRequest=null;
+}
+
+function showSmileAtSelection(data){
+ const slider=$('smile-time');
+ if(!slider){renderSmile(data.smile);return;}
+ const index=pinnedSmile===null?smileTimes.length-1:smileTimes.indexOf(pinnedSmile);
+ const timestamp=smileTimes[index];
+ slider.value=String(Math.max(0,index));
+ slider.parentElement.style.setProperty('--phase-right',smileTimes.length>1?(100*index/(smileTimes.length-1))+'%':'0%');
+ const label=timestamp?stampLabel(timestamp):'—';
+ $('smile-timestamp').textContent=label;
+ slider.setAttribute('aria-valuetext',label);
+ if(!timestamp||data.smile?.timestamp===timestamp){
+  cancelSmileRequest();
+  visibleSmile=data.smile;
+  renderSmile(visibleSmile);
+  return;
+ }
+ if(visibleSmile?.timestamp===timestamp){renderSmile(visibleSmile);return;}
+ if(smileRequest?.timestamp===timestamp)return;
+ cancelSmileRequest();
+ const controller=new AbortController();
+ controller.timestamp=timestamp;
+ smileRequest=controller;
+ visibleSmile=null;
+ $('smile-note').textContent='正在读取 '+label+' 的报价快照…';
+ $('smile-chart').replaceChildren();
+ $('chart-tooltip').hidden=true;
+ smileTimer=setTimeout(async()=>{
+  try{
+   const query=new URLSearchParams({symbol:data.product,timestamp});
+   const result=await api('/api/smile?'+query,{signal:controller.signal});
+   if(smileRequest!==controller)return;
+   visibleSmile=result;
+   renderSmile(result);
+  }catch(error){
+   if(smileRequest===controller)$('smile-note').textContent=label+' · '+error.message;
+  }finally{
+   if(smileRequest===controller)smileRequest=null;
+  }
+ },120);
+}
+
+function updateSmileTimeline(data){
+ const scope=JSON.stringify([data.product,data.range.start,data.range.end]);
+ if(scope!==smileScope){
+  cancelSmileRequest();pinnedSmile=null;visibleSmile=null;smileScope=scope;
+ }
+ smileTimes=data.mvix_history.filter(row=>row.quality==='valid').map(row=>row.timestamp);
+ if(pinnedSmile!==null&&!smileTimes.includes(pinnedSmile))pinnedSmile=null;
+ const slider=$('smile-time');
+ if(slider){slider.max=String(Math.max(0,smileTimes.length-1));slider.disabled=smileTimes.length<2;}
+ showSmileAtSelection(data);
+}
+$('smile-time')?.addEventListener('input',()=>{
+ const index=Number($('smile-time').value);
+ pinnedSmile=index===smileTimes.length-1?null:smileTimes[index];
+ showSmileAtSelection(marketData);
+});
+
 function renderSmile(smile){
  $('smile-panel').hidden=false;
  const select=$('smile-expiry'),old=select.value,terms=smile?.terms||[];
@@ -62,11 +129,11 @@ function renderSmile(smile){
  $('smile-note').textContent=stampLabel(smile.timestamp)+' · 到期 '+term.expiry_date+' · Black 远期模型 · 利率 '+fmt(term.rate*100,2)+'% · '+term.excluded+' 个报价无法反算';
  const series=[['CALL','认购',colors[0],'smile-call'],['PUT','认沽',colors[1],'smile-put']].filter(x=>$(x[3]).checked).map(([side,name,color])=>({name,color,width:2.1,points:'isolated',data:term.points.filter(p=>p.side===side).map(p=>[p.strike,p.iv,p])}));
  if(!series.length){$('smile-chart').textContent='请勾选认购或认沽';return;}
- const spot=marketData?.index_bars?.at(-1);
+ const spot=smile.spot;
  if(spot)$('smile-note').textContent+=' · 标的 '+fmt(spot.close,2)+'（'+stampLabel(spot.timestamp)+'）';
  chart('smile-chart',series,{reference:spot?{value:spot.close,label:fmt(spot.close,2)}:null,xLabel:x=>fmt(x,0),decimals:1,tooltip:x=>stampLabel(smile.timestamp)+'\n到期 '+term.expiry_date+' · 执行价 '+fmt(x,0)+'\n'+series.map(s=>{const row=s.data.find(d=>d[0]===x),q=row?.[2];return s.name+' IV '+fmt(row?.[1],2)+'% · 中间价 '+fmt(q?.mid,2)+(q?.quote_time?'\n报价时间 '+stampLabel(q.quote_time):'');}).join('\n')});
 }
-['smile-call','smile-put','smile-expiry'].forEach(id=>$(id)?.addEventListener('change',()=>renderSmile(marketData?.smile)));
+['smile-call','smile-put','smile-expiry'].forEach(id=>$(id)?.addEventListener('change',()=>{if(visibleSmile)renderSmile(visibleSmile);}));
 
 
 let phaseSelection=null;
@@ -106,6 +173,16 @@ $('phase-reset')?.addEventListener('click',()=>{phaseSelection=null;renderPhase(
 
 
 function td(row,value,className=''){const cell=document.createElement('td');cell.textContent=value??'—';cell.className=className;row.append(cell);}
+function setQuoteOnly(enabled){
+ const note=$('quote-only-note'),sectionTitle=$('market-section-title'),chartTitle=$('market-chart-title');
+ // Older research pages use the original layout until the next navigation.
+ if(!note||!sectionTitle||!chartTitle)return false;
+ document.querySelectorAll('[data-mvix-only]').forEach(node=>node.hidden=enabled);
+ note.hidden=!enabled;
+ sectionTitle.textContent=enabled?'现货行情':'市场联动';
+ chartTitle.textContent=enabled?'标的价格':'标的价格 & 波动率指数';
+ return enabled;
+}
 function renderResearch(){
  if(researchData?.meta.settings)$('visit-rule').textContent='离开 1 ATR、间隔至少 '+researchData.meta.settings.gap+' 根后首次返回价格带；样本数仅计同方向。';
  if(!researchData)return;const d=researchData,b=d.bars,last=b.at(-1),visits=d.visits;
@@ -150,7 +227,7 @@ async function loadResearch(e,{background=false}={}){
   // Keep chart nodes and hover state intact when a poll returns unchanged data.
   if(!background||key!==renderedPayload||$('research-content').classList.contains('muted-content')){
    if(data.source==='tqsdk')renderTq(data);
-   else{marketData=null;researchData=data;$('market-updated').textContent='数据时间：'+stampLabel(data.meta.asof);renderResearch();$('research-content').classList.remove('muted-content');$('export').disabled=false;}
+   else{cancelSmileRequest();smileScope=null;setQuoteOnly(false);$('smile-panel').hidden=true;marketData=null;researchData=data;$('market-updated').textContent='数据时间：'+stampLabel(data.meta.asof);renderResearch();$('research-content').classList.remove('muted-content');$('export').disabled=false;}
   }
   renderedRequest=query;renderedPayload=key;$('error').hidden=true;
   if(!background)document.querySelectorAll('.chart-parameter-status').forEach(label=>label.textContent='已更新');
@@ -164,7 +241,7 @@ async function loadResearch(e,{background=false}={}){
  }
 }
 $('research-form')?.addEventListener('submit',loadResearch);
-$('source')?.addEventListener('change',()=>{const source=$('source').value;$('csv-label').hidden=source!=='csv';$('scenario-label').hidden=source!=='demo';$('tq-market').hidden=source!=='live';$('smile-panel').hidden=source!=='live';$('mvix-summary').textContent='指数点 · 非单一期权 IV';});
+$('source')?.addEventListener('change',()=>{const source=$('source').value;if(source!=='live')cancelSmileRequest();if($('date-presets'))$('date-presets').hidden=source!=='live';$('csv-label').hidden=source!=='csv';$('scenario-label').hidden=source!=='demo';$('tq-market').hidden=source!=='live';$('smile-panel').hidden=source!=='live'||marketData?.product==='500';$('mvix-summary').textContent='指数点 · 非单一期权 IV';});
 $('export')?.addEventListener('click',()=>{if(!researchData)return;const blob=new Blob([JSON.stringify(researchData,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='margin-research-'+researchData.meta.source+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);});
 async function loadPricing(e){e?.preventDefault();$('pricing-error').textContent='';const f=new FormData($('pricing-form'));const params=new URLSearchParams({S:f.get('S'),K:f.get('K'),t:Number(f.get('days'))/365,v:Number(f.get('vol'))/100,r:Number(f.get('rate'))/100,q:Number(f.get('yield'))/100,type:f.get('type')});try{const data=await api('/api/stress?'+params);$('greek-cards').replaceChildren();Object.entries(data.greeks).forEach(([k,v])=>{const card=document.createElement('article'),name=document.createElement('div'),num=document.createElement('strong');name.textContent=k;num.textContent=fmt(v,5);card.append(name,num);$('greek-cards').append(card);});const table=document.createElement('table'),head=document.createElement('tr');td(head,'Δσ / ΔS');const xs=[...new Set(data.scenarios.map(r=>r.price_change))],ys=[...new Set(data.scenarios.map(r=>r.vol_change))].reverse();xs.forEach(x=>td(head,(x*100).toFixed(0)+'%'));table.append(head);const max=Math.max(...data.scenarios.map(r=>Math.abs(r.pnl)),.000001);ys.forEach(y=>{const row=document.createElement('tr');td(row,(y*100).toFixed(0)+' pp');xs.forEach(x=>{const v=data.scenarios.find(r=>r.price_change===x&&r.vol_change===y);const cell=document.createElement('td');cell.textContent=fmt(v.pnl,4);cell.style.background=v.pnl>0?`rgba(208,139,77,${.08+.55*Math.abs(v.pnl)/max})`:`rgba(29,148,132,${.08+.55*Math.abs(v.pnl)/max})`;cell.title=`精确价格 ${fmt(v.exact,6)}\n二阶近似 ${fmt(v.approximation,6)}\n近似误差 ${fmt(v.approximation-v.exact,6)}`;row.append(cell);});table.append(row);});$('stress-grid').replaceChildren(table);}catch(e){$('pricing-error').textContent=e.message;}}
 $('pricing-form')?.addEventListener('submit',loadPricing);
@@ -173,6 +250,28 @@ $('tool')?.addEventListener('change',()=>{$('tool-symbol').value=$('tool').value
 const today=new Date();
 const iso=d=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);
 if ($('end')) $('end').value=iso(today);
+function presetRange(days){
+ const end=iso(new Date());
+ const first=new Date(end+'T00:00:00Z');
+ first.setUTCDate(first.getUTCDate()-days+1);
+ return {start:first.toISOString().slice(0,10),end};
+}
+function markDatePreset(){
+ document.querySelectorAll('#date-presets [data-days]').forEach(button=>{
+  const range=presetRange(Number(button.dataset.days));
+  button.setAttribute('aria-pressed',String(range.start===$('start').value&&range.end===$('end').value));
+ });
+}
+$('date-presets')?.addEventListener('click',event=>{
+ const button=event.target.closest('button[data-days]');
+ if(!button)return;
+ const range=presetRange(Number(button.dataset.days));
+ $('start').value=range.start;$('end').value=range.end;
+ markDatePreset();
+ $('research-form').requestSubmit();
+});
+['start','end'].forEach(id=>$(id)?.addEventListener('input',markDatePreset));
+markDatePreset();
 if ($('tool-end')) $('tool-end').value=iso(today);
 if ($('tool-start')) $('tool-start').value=iso(new Date(today.getTime()-7*86400000));
 let resizeTimer;
@@ -202,13 +301,23 @@ function renderTq(d){
  const f=d.future_bars;chart('oi-chart',[{name:'成交量',data:f.map((r,i)=>[i,r.volume])},{name:'持仓量',right:true,data:f.map((r,i)=>[i,r.close_oi])}],{dual:true,xRange:[0,Math.max(f.length-1,1)],xLabel:i=>f[Math.round(i)]?.timestamp.replace('T',' ').slice(5,16)||'',timeLabel:i=>stampLabel(f[Math.round(i)]?.timestamp)});
  const m=d.mvix,valid=d.mvix_latest_valid??(m?.quality==='valid'?m:null),cache=d.mvix_cache;
  const mvixCaption=valid?(valid.quality==='reference'?'参考估算':'指数点'):'所选区间暂无有效快照';
- renderSmile(d.smile);
-
+ const quoteOnly=setQuoteOnly(d.product==='500');
+ $('smile-panel').hidden=quoteOnly;
+ if(quoteOnly){cancelSmileRequest();smileScope=null;}
+ else updateSmileTimeline(d);
 
  if(d.research){researchData=d.research;renderResearch();$('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(!['valid','reference'].includes(m?.quality)?' · 最近采样无效，显示历史值':'');$('export').disabled=false;return;}
  researchData=null;phaseSelection=null;$('phase-window').hidden=true;$('cache-status').hidden=true;const ib=d.index_bars,last=ib.at(-1);
- $('metric-price').textContent=fmt(last?.close,1);$('symbol-mini').textContent=d.product+' 指数';$('metric-date').textContent=last?.timestamp.replace('T',' ')||'等待行情';$('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(valid&&!['valid','reference'].includes(m?.quality)?' · 最近采样无效，显示历史值':'');$('metric-corr').textContent='—';$('level-corr').textContent='等待同期 MVIX 历史';$('metric-drift').textContent='—';$('metric-state').textContent='样本积累中';
- chart('market-chart',[{name:'指数',data:ib.map((r,i)=>[i,r.close])},{name:'MVIX',color:'#bb6929',right:true,points:'isolated',width:2.2,data:ib.map((r,i)=>[i,displayValue(r,'vix')])}],{dual:true,xLabel:i=>ib[Math.round(i)]?.timestamp.replace('T',' ').slice(5,16)||'',timeLabel:i=>stampLabel(ib[Math.round(i)]?.timestamp),tooltip:i=>{const r=ib[Math.round(i)];return stampLabel(r.timestamp)+'\n指数 '+fmt(r.close)+'\nMVIX '+fmt(displayValue(r,'vix'),2)+carryNote(r);}});
+ $('metric-price').textContent=fmt(last?.close,1);$('symbol-mini').textContent=d.product+' 指数';$('metric-date').textContent=last?.timestamp.replace('T',' ')||'等待行情';
+ $('data-range').textContent=d.range.start+' — '+d.range.end+' / '+ib.length+' 根指数行情 / '+d.period+' 分钟';
+ const spotSeries={name:'指数',data:ib.map((r,i)=>[i,r.close])};
+ const axis={xLabel:i=>ib[Math.round(i)]?.timestamp.replace('T',' ').slice(5,16)||'',timeLabel:i=>stampLabel(ib[Math.round(i)]?.timestamp)};
+ if(quoteOnly){
+  chart('market-chart',[spotSeries],axis);
+  return;
+ }
+ $('metric-vix').textContent=fmt(valid?.value,2);$('mvix-summary').textContent=mvixCaption+(valid&&!['valid','reference'].includes(m?.quality)?' · 最近采样无效，显示历史值':'');$('metric-corr').textContent='—';$('level-corr').textContent='等待同期 MVIX 历史';$('metric-drift').textContent='—';$('metric-state').textContent='样本积累中';
+ chart('market-chart',[spotSeries,{name:'MVIX',color:'#bb6929',right:true,points:'isolated',width:2.2,data:ib.map((r,i)=>[i,displayValue(r,'vix')])}],{...axis,dual:true,tooltip:i=>{const r=ib[Math.round(i)];return stampLabel(r.timestamp)+'\n指数 '+fmt(r.close)+'\nMVIX '+fmt(displayValue(r,'vix'),2)+carryNote(r);}});
  ['phase-chart','residual-chart','correlation-chart','visits-chart','hv-chart','sensitivity-chart'].forEach(id=>{$(id).replaceChildren();$(id).textContent='MVIX 有效样本不足，暂不生成漂移信号';});
- $('visits-body').replaceChildren();$('visit-count').textContent='0 次回访';$('data-range').textContent=d.range.start+' — '+d.range.end+' / '+ib.length+' 根指数行情 / '+d.period+' 分钟';$('phase-range').textContent='观察区间 '+d.range.start+' — '+d.range.end;
+ $('visits-body').replaceChildren();$('visit-count').textContent='0 次回访';$('phase-range').textContent='观察区间 '+d.range.start+' — '+d.range.end;
 }

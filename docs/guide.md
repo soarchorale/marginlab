@@ -4,7 +4,7 @@ Use this guide to answer three questions about a chart: **What was measured? Whi
 
 ## Research dashboard
 
-The research page (`/`) opens on one-minute bars for the last seven Shanghai calendar dates, including today. Dates are inclusive. A weekend or an unopened session contributes no bars. Select a product, period, data source and interval, then submit the form. Chart-local parameter buttons submit the same research settings. The phase slider only changes the visible part of one chart.
+The research page (`/volatility`, linked from `/` by a redirect) opens on one-minute bars for the last seven Shanghai calendar dates, including today. The live date shortcuts select today, three dates or seven dates in Shanghai, including today, and immediately submit the range. Dates are inclusive. A weekend or an unopened session contributes no bars. Select a product, period, data source and interval, then submit the form. Chart-local parameter buttons submit the same research settings. The phase slider only changes the visible part of one chart.
 
 | Selection | Futures charts and volume playback | Spot index used for drift | Index options used for MVIX |
 | --- | --- | --- | --- |
@@ -12,6 +12,8 @@ The research page (`/`) opens on one-minute bars for the last seven Shanghai cal
 | CSI 300 | IF | CSI 300 | IO |
 | CSI 1000 | IM | CSI 1000 | MO |
 | CSI 500 | IC | CSI 500 | None; no matching index-option MVIX |
+
+In live CSI 500 mode, the dashboard shows IC futures, volume, open interest and the spot index, with one notice explaining the absence of index-option MVIX.
 
 **Sources.** Live mode reads stored market data from SQLite. A local read-only replica stops at its last imported observation. Demo mode uses a generated scenario; CSV mode uses the supplied rows rather than retrieving live history. A CSV needs `timestamp,open,high,low,close,vix`, with optional `volume`. Supply completed bars at the selected interval, and enter volatility in index points (20, not 0.20). The export button saves the current research result, including bars, visits, anchor and analysis settings; it is not a database or raw quote-chain backup.
 
@@ -27,9 +29,9 @@ The adjacent chart uses the same contract and period: **volume** on the left is 
 
 ### Volatility smile
 
-This is a cross-section at one instant: the latest **valid** MVIX quote snapshot in the selected interval. The note gives its time. If the afternoon's snapshots were invalid, the smile can legitimately come from the morning. Choose an expiry; the colored call and put checkboxes double as the legend. The horizontal axis is strike and the vertical axis is annualized implied volatility in percent. Hover for the strike, IV, midpoint and quote time where available.
+This is a cross-section at one instant: a **valid** MVIX quote snapshot in the selected interval. The time slider starts at the latest valid minute and skips absent, reference and auction records. Selecting an earlier minute keeps that snapshot on screen as the dashboard refreshes. Return to the rightmost position to follow incoming snapshots. The note gives its time. If the afternoon's snapshots were invalid, the smile can legitimately come from the morning. Choose an expiry; the colored call and put checkboxes double as the legend. The horizontal axis is strike and the vertical axis is annualized implied volatility in percent. Hover for the strike, IV, midpoint and quote time where available.
 
-The vertical dashed marker gives the **latest spot close in the selected interval**, not the parity forward used to calculate IV. Its time can differ from the smile's. At each strike, IV is inverted from the bid/ask midpoint using a Black forward model, the term's parity forward, remaining time and rate. Missing, nonpositive or crossed quotes cannot supply a smile point; a midpoint outside the model's price bounds also has no usable IV. A valid aggregate MVIX does not require every smile point to exist.
+The vertical dashed marker gives the **most recent completed one-minute spot close on the snapshot date at or before the snapshot boundary**, not the parity forward used to calculate IV. Its label gives the bar start time. The marker is omitted when there is no such bar. At each strike, IV is inverted from the bid/ask midpoint using a Black forward model, the term's parity forward, remaining time and rate. Missing, nonpositive or crossed quotes cannot supply a smile point; a midpoint outside the model's price bounds also has no usable IV. A valid aggregate MVIX does not require every smile point to exist.
 
 ### Spot price and volatility index
 
@@ -82,7 +84,7 @@ A Greek needs one usable price/volatility pair, not a rolling fit. The live rese
 
 ## Pricing and stress testing
 
-On `/pricing`, choose call or put and enter spot, strike, remaining calendar days, volatility, rate and dividend yield. Percentage fields take percentages: enter 20 for 20% volatility. This calculator uses European Black–Scholes pricing with continuous yield; no live contract or position is selected.
+On `/pricing`, choose call or put and enter spot, strike, remaining calendar days, volatility, rate and dividend yield. Spot and strike accept prices down to 0.001 in steps of 0.001. Percentage fields take percentages: enter 20 for 20% volatility. This calculator uses European Black–Scholes pricing with continuous yield; no live contract or position is selected.
 
 The cards report theoretical price and sensitivities: delta to a spot move, gamma to changes in delta, vega to volatility, theta to time passage (annual and daily), and Vanna/Volga to mixed spot–volatility and second-order volatility moves. Vega is quoted per **1.0** change in decimal volatility: multiply by 0.01 for the first-order effect of one volatility percentage point.
 
@@ -90,14 +92,14 @@ The stress grid varies spot horizontally (relative percent) and volatility verti
 
 ## Futures volume playback
 
-On `/chips`, select a futures product and move the playback cursor or press Play. Both panels use the same trailing window ending at the selected minute; neither sees later bars. Window length defaults to 240 minutes, price-bin count to 40 and moving-average length to 20 bars.
+On `/chips`, select a futures product and move the playback cursor or press Play. Changing the product pauses playback and clears the previous contract while the selected contract loads. Both panels use the same trailing window ending at the selected minute; neither sees later bars. Window length defaults to 240 minutes, price-bin count to 40 and moving-average length to 20 bars.
 
 - **Price and moving average:** time runs horizontally and futures price vertically. The price line is minute close; the second line is a simple mean of closes within the visible window. It starts only after enough bars have accumulated.
 - **Volume at price:** the vertical axis groups minute closing prices into bins. Bar length shows total volume assigned to each bin. The five stacked shades split the window from earlier to later minutes. More bins improve price resolution but leave fewer observations per bin. Since each minute's entire volume is assigned to its close, the profile cannot identify trade direction, exact execution prices or holder cost basis.
 
 ## Method notes, settings and access
 
-- **Method notes (`/method`):** explains same-price revisits, cumulative residuals, spot-index alignment, quote-derived MVIX, display-only closing-auction carries, retention and the assumptions behind the model sensitivities.
+- **Method notes (`/method`):** follows the charts on the research, pricing and playback pages. Each section explains the measured quantity, time or price axis, controls, units and how to read gaps or sparse observations.
 - **Settings (`/settings`):** the saved-data table lists series, frequency, row count and first/last timestamps. A snapshot row is not necessarily a valid MVIX. The editable refresh interval applies to the legacy daily cache. It does not set the live dashboard's 15-second visible-page polling interval or the deployment-owned retention period.
 - **Login and logout:** sign in to read protected pages and APIs. Production collection runs independently of browser sessions. Closing the browser or logging out does not stop the production collector.
 - **Retired tools:** market screening and ranking are hidden from navigation; their old live endpoints are retired. The active playback page uses stored futures bars, not the retained simulated frame generator.

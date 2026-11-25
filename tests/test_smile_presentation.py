@@ -7,6 +7,31 @@ from marginlab.presentation import display_values,correlation_display
 
 
 class SmileTests(unittest.TestCase):
+    def test_history_requires_valid_exact_snapshot_and_completed_spot_bar(self):
+        from support import app_for_test, login
+        from marginlab.storage import connect
+        app = app_for_test(self, MARKET_READ_ONLY=True)
+        client = app.test_client()
+        day = '2026-11-25T'
+        def snapshot(minute):
+            return client.get('/api/smile', query_string={'symbol':'50','timestamp':day+minute})
+        self.assertEqual(snapshot('09:31:00').status_code, 401)
+        login(client)
+        with connect(app.config['DATABASE']) as db:
+            for minute,quality in [('09:30:00','valid'),('09:31:00','valid'),
+                                   ('09:32:00','reference'),('09:33:00','auction')]:
+                db.execute('INSERT INTO tq_snapshots VALUES(?,?,?,?,?,?)',
+                           ('50',day+minute,20,quality,'{}','[]'))
+            for stamp,close in [('2026-11-24T14:59:00',80),(day+'09:30:00',100),(day+'09:31:00',110)]:
+                db.execute('INSERT INTO tq_bars(symbol,timestamp,close) VALUES(?,?,?)',
+                           ('SSE.000016',stamp,close))
+        self.assertIsNone(snapshot('09:30:00').json['spot'])
+        result = snapshot('09:31:00').json
+        self.assertEqual(result['timestamp'],day+'09:31:00')
+        self.assertEqual(result['spot'],dict(timestamp=day+'09:30:00',close=100))
+        for minute in ('09:32:00','09:33:00','09:34:00'):
+            self.assertEqual(snapshot(minute).status_code,404)
+
     def test_recovers_forward_iv_for_both_sides_and_rejects_bounds(self):
         for side in ('CALL','PUT'):
             for strike in (90,100,110):

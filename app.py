@@ -9,6 +9,9 @@ if __name__ == '__main__':
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, stop)
     feed = app.extensions['tq_feed']
+    if feed.read_only:
+        # The local replica serves working-tree assets; reload their matching templates on request.
+        app.jinja_env.auto_reload = True
     if os.environ.get('MARGIN_AUTOCOLLECT','1') == '1':
         feed.start_background()
     from marginlab.logging_setup import event

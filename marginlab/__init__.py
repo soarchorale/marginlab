@@ -1,7 +1,7 @@
 """Margin Lab unified options research application."""
 from pathlib import Path
 import os
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 from .analytics import DriftConfig, analyze
 from .data import SYMBOLS, demo, csv_bars, records
 from .pricing import greeks, stress, taylor
@@ -78,6 +78,10 @@ def create_app(config=None):
 
     @app.get('/')
     def index():
+        return redirect(url_for('volatility_page'))
+
+    @app.get('/volatility')
+    def volatility_page():
         from .cache import research_start
         return render_template('index.html', page='research', page_title='波动率研究', history_cutoff=research_start())
 
@@ -145,6 +149,20 @@ def create_app(config=None):
         cfg = DriftConfig(window=number(args,'window',60,20,500,True), horizon=number(args,'horizon',16,2,100,True), correlation=number(args,'correlation',30,5,250,True), band=number(args,'band',.25,.05,.9), gap=number(args,'gap',4,1,100,True), lookback_days=number(args,'lookback_days',5,1,250,True))
         result = analyze(df,cfg,252 if period=='daily' else 252*240/int(period))
         return jsonify(bars=records(result['bars']), visits=result['visits'], anchor=result['anchor'], meta=dict(symbol=symbol,name=SYMBOLS[symbol][0],period=period,source=source,count=len(df),asof=str(df.timestamp.iloc[-1]),settings=cfg.__dict__,cache=cache_info,notes=['同价位差未做带内价格响应修正；未控制事件、期限结构、日内季节性。','残差为同步异常检测，非预测或交易指令。','回访阈值未按间隔分层；异常标签仅为研究候选。']))
+
+    @app.get('/api/smile')
+    def historical_smile():
+        from .market import PRODUCTS, smile_at
+        from .storage import read_snapshot
+        product = request.args.get('symbol')
+        timestamp = request.args.get('timestamp')
+        if product not in PRODUCTS or not PRODUCTS[product]['option'] or not timestamp:
+            raise ValueError('An option product and snapshot timestamp are required')
+        with read_snapshot(app.config['DATABASE']) as db:
+            smile = smile_at(db, product, timestamp)
+        if smile is None:
+            return jsonify(error='该时刻没有有效的报价快照'), 404
+        return jsonify(smile)
 
     @app.get('/option/greek')
     @app.get('/api/greeks')

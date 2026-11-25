@@ -8,6 +8,7 @@ from .tqfeed import PRODUCTS, Feed
 from .tqstore import read_bars, statuses
 from .data import records
 from .analytics import analyze, DriftConfig
+from .presentation import display_values, correlation_display
 
 
 def request_feed(app,product):
@@ -38,6 +39,26 @@ def resample(rows,period):
     return result.reset_index()
 
 
+def smile_at(db, product, timestamp):
+    """Rebuild one observed smile and align spot to the last completed minute."""
+    from .smile import build_smile
+    row = db.execute(
+        "SELECT timestamp, details, quotes FROM tq_snapshots "
+        "WHERE product=? AND timestamp=? AND quality='valid'",
+        (product, timestamp),
+    ).fetchone()
+    if row is None:
+        return None
+    boundary = pd.Timestamp(timestamp)
+    last_start = boundary.floor('min') - pd.Timedelta(minutes=1)
+    spot = db.execute(
+        'SELECT timestamp, close FROM tq_bars WHERE symbol=? AND timestamp>=? '
+        'AND timestamp<=? ORDER BY timestamp DESC LIMIT 1',
+        (PRODUCTS[product]['index'], boundary.normalize().isoformat(), last_start.isoformat()),
+    ).fetchone()
+    return dict(build_smile(*row), spot=dict(spot) if spot else None)
+
+
 def _build_payload(app,args):
     from .cache import cutoff_for,settings
     product = args.get('symbol','50')
@@ -61,11 +82,11 @@ def _build_payload(app,args):
                                           (product,start.isoformat(),end.isoformat()))]
         latest_index_timestamp=db.execute('SELECT MAX(timestamp) FROM tq_bars WHERE symbol=?',(PRODUCTS[product]['index'],)).fetchone()[0]
         job = db.execute('SELECT payload FROM tq_history_jobs WHERE product=?',(product,)).fetchone()
-    from .smile import build_smile
-    from .presentation import display_values, correlation_display
+    latest_smile_time = next((row['timestamp'] for row in reversed(snaps) if row['quality']=='valid'), None)
     with connect(app.config['DATABASE']) as db:
-        smile_row=db.execute("SELECT timestamp,details,quotes FROM tq_snapshots WHERE product=? AND quality='valid' AND timestamp>=? AND timestamp<? ORDER BY timestamp DESC LIMIT 1",(product,start.isoformat(),end.isoformat())).fetchone()
-    smile=build_smile(*smile_row) if smile_row else dict(timestamp=None,terms=[])
+        smile = smile_at(db, product, latest_smile_time) if latest_smile_time else None
+    if smile is None:
+        smile = dict(timestamp=None, terms=[], spot=None)
     research = None
     reason = 'MVIX 报价历史尚在积累；不会用当前报价回填历史'
     if not ib.empty:

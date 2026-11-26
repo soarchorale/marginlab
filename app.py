@@ -12,6 +12,8 @@ if __name__ == '__main__':
     if feed.read_only:
         # The local replica serves working-tree assets; reload their matching templates on request.
         app.jinja_env.auto_reload = True
+        from marginlab.signal_preview import register_preview
+        register_preview(app)
     if os.environ.get('MARGIN_AUTOCOLLECT','1') == '1':
         feed.start_background()
     from marginlab.logging_setup import event

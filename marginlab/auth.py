@@ -36,6 +36,8 @@ def install_auth(app):
 
     def safe_next(value):
         # Fixed local allowlist prevents open redirects, including encoded backslashes.
+        if value == '/debug/signal-preview' and 'signal_preview' in app.view_functions:
+            return value
         return value if value in ['/', '/volatility', '/pricing', '/chips', '/method', '/settings'] else '/'
 
     @app.before_request

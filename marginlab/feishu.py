@@ -5,11 +5,17 @@ import re
 import os
 import math
 import time
+from copy import deepcopy
+from datetime import datetime
 from urllib.parse import urlsplit
+
+from .coverage import ZONE
 
 from .logging_setup import event
 
 TTL = 120
+WATCH_TTL = 30
+WATCH_LIMIT = 3
 MAX_ATTEMPTS = 3
 GROUP_WINDOW = 600
 GROUP_LIMIT = 6
@@ -38,44 +44,121 @@ def load_webhook(file):
     return webhook_path(value)
 
 
+def rule_text(item):
+    rule = item['rule']
+    up = item['direction'] == 'up'
+    move = '升波' if up else '降波'
+    if rule in ('residual','residual_watch'):
+        title = f'累计异常{move}' if rule == 'residual' else f'累计{move}首次越界'
+        detail = '连续 3 根越界' if rule == 'residual' else '首次越界，连续 3 根可确认'
+        return title, (f"累计残差 **{item['value']:+.2f}**　·　{item['percentile']} 分位阈值 "
+                       f"{item['threshold']:+.2f}\n最近 16 根累计，{detail}。单位为对数变化 × 100。")
+    if rule == 'baseline':
+        title = '同价位基准抬升' if up else '同价位基准回落'
+        return title, (f"历史匹配中位数 **{item['baseline']:.3f}**　·　差值 **{item['difference']:+.3f} 点**\n"
+                       f"{item['entry']}，历史匹配 {item['matches']} 次。")
+    if rule == 'revisit':
+        return f'同价位{move}已确认', (f"同价位差 **{item['value']:+.2f}**　·　锚点 {item['anchor']:,.2f}\n"
+                                  f"{item['entry']}，历史匹配 {item['matches']} 次。单位为对数变化 × 100。")
+    if rule == 'comove':
+        return ('现货与 MVIX 同涨' if up else '现货与 MVIX 同跌',
+                f"近 5 分钟　现货 **{item['spot']:+.3f}%**　·　MVIX **{item['mvix']:+.3f} 点**")
+    if rule == 'correlation':
+        return '相关性换区', f"30 根收益率相关　**{item['value']:+.2f}**"
+    _, expiry, side = rule.split(':')
+    return '波动率微笑翼差扩大', f"{expiry}　{'认购' if side=='CALL' else '认沽'}翼　5 分钟扩大 **{item['change']:+.3f} IV 点**"
+
+
 def card(product, stamp, row, triggers):
-    directions = {item['direction'] for item in triggers}
-    direction = next(iter(directions)) if len(directions) == 1 else 'mixed'
-    label, color = {'up': ('升波', 'orange'), 'down': ('降波', 'blue'),
-                    'mixed': ('信号分歧', 'grey')}[direction]
-    title = f"{PRODUCT_NAMES[product]} ｜ {label}"
-    metrics = f"**MVIX　{row.vix:.2f}**　　现货收盘　{row.close:,.2f}"
-    if math.isfinite(row.close_change) and math.isfinite(row.vix_change):
-        metrics += (f"\n近 16 根　MVIX {row.vix_change:+.2f}%　·　"
-                    f"现货 {row.close_change:+.2f}%")
-    if math.isfinite(row.corr_return):
-        metrics += f"\n30 根收益率相关　{row.corr_return:+.2f}"
+    if not isinstance(row, dict):
+        row = vars(row)
+    order = {'confirmed':0,'watch':1,'context':2}
+    triggers = sorted(triggers, key=lambda t:order[t.get('level','confirmed')])
+    first = triggers[0]
+    level = first.get('level','confirmed')
+    labels = {'confirmed':'异常确认','watch':'盯盘观察','context':'行情记录'}
+    label = '观察升级' if level=='confirmed' and first.get('related_event') else labels[level]
+    color = 'wathet' if level != 'confirmed' else ('orange' if first['direction']=='up' else 'blue')
+    title = f"{label}｜{PRODUCT_NAMES[product]} · {rule_text(first)[0]}"
+    metrics = f"**MVIX　{row['vix']:.3f}**　　现货收盘　{row['close']:,.2f}"
+    if all(row[k] is not None and math.isfinite(row[k]) for k in ('close_change','vix_change')):
+        metrics += f"\n近 16 根　MVIX {row['vix_change']:+.2f}%　·　现货 {row['close_change']:+.2f}%"
+    if row['corr_return'] is not None and math.isfinite(row['corr_return']):
+        zone = {'positive':'明显正相关','negative':'明显负相关','weak':'弱联动'}.get(row.get('corr_zone'), '')
+        metrics += f"\n30 根收益率相关　{row['corr_return']:+.2f}　{zone}".rstrip()
     sections = [dict(tag='markdown', content=metrics)]
     for item in triggers:
-        if item['rule'] == 'residual':
-            text = (f"**累计异常{'升波' if item['direction'] == 'up' else '降波'}**\n"
-                    f"累计残差 **{item['value']:+.2f}**　·　"
-                    f"{item['percentile']} 分位阈值 {item['threshold']:+.2f}\n"
-                    "最近 16 根累计，连续 3 根越界。数值为对数变化 × 100。")
-        else:
-            text = (f"**同价位{'升波' if item['direction'] == 'up' else '降波'}已确认**\n"
-                    f"同价位差 **{item['value']:+.2f}**　·　锚点 {item['anchor']:,.2f}\n"
-                    f"{item['entry']}，近 5 个交易日有 {item['matches']} 次历史匹配。"
-                    "差值为相对历史中位数的对数变化 × 100。")
-        sections.extend([dict(tag='hr'), dict(tag='markdown', content=text)])
-    return {'msg_type': 'interactive', 'card': {'schema': '2.0',
-            'header': {'template': color, 'title': {'tag': 'plain_text', 'content': title},
-                       'subtitle': {'tag': 'plain_text', 'content': f'{stamp.replace("T", " ")} 上海时间 · 1分钟'}},
-            'body': {'elements': sections}}}
+        heading, body = rule_text(item)
+        sections.extend([dict(tag='hr'), dict(tag='markdown', content=f"**{heading}**\n{body}")])
+    return {'msg_type':'interactive','card':{'schema':'2.0',
+            'header':{'template':color,'title':{'tag':'plain_text','content':title},
+                      'subtitle':{'tag':'plain_text','content':f"{stamp.replace('T',' ')} 上海时间 · 1分钟"}},
+            'body':{'elements':sections}}}
 
 
-def post(path, payload):
+def preview_card(payload):
+    """Mark both the open card and the collapsed notification on a detached copy."""
+    message = deepcopy(payload)
+    card_body = message['card']
+    title = card_body['header']['title']
+    prefix = '【本地测试】'
+    if not title['content'].startswith(prefix):
+        title['content'] = prefix + title['content']
+    card_body['header']['template'] = 'purple'
+    card_body.setdefault('config', {})['summary'] = {'content': title['content']}
+    return message
+
+
+def prepare_delivery(db, row, now):
+    """Check the latest committed rule states and render this attempt's immutable wire payload."""
+    if row['context'] is None:
+        return row['payload'], None
+    stamp = datetime.fromisoformat(row['endpoint']).replace(tzinfo=ZONE)
+    age = now - stamp.timestamp()
+    cp = db.execute('SELECT endpoint,states FROM checkpoints WHERE product=? AND version=?',
+                    (row['product'],row['id'].split('/')[0])).fetchone()
+    if not cp:
+        return None, 'unverified'
+    checked, states = cp['endpoint'], json.loads(cp['states'])
+    current_minute = datetime.fromtimestamp(now,ZONE).replace(tzinfo=None,second=0,microsecond=0).isoformat()
+    if age >= 60 and checked < current_minute:
+        return None, 'wait_for_minute'
+    evidence = db.execute('SELECT evidence FROM signal_triggers WHERE event_id=? ORDER BY rule', (row['id'],))
+    eligible = []
+    for record in evidence:
+        t = json.loads(record[0])
+        if t['policy'] != 'notify' or (t['level']=='watch' and age>WATCH_TTL):
+            continue
+        if (states['active'].get(t['rule'])==t['direction']
+                and states['since'].get(t['rule'])==t['since']):
+            eligible.append(t)
+    if not eligible or (row['tier']=='confirmed' and not any(t['level']=='confirmed' for t in eligible)):
+        return None, 'superseded'
+    msg = card(row['product'],row['endpoint'],json.loads(row['context']),eligible)
+    color, label = ('turquoise','及时') if age<=10 else ('yellow','稍有延迟') if age<=30 else ('orange','延迟确认')
+    sent = datetime.fromtimestamp(now,ZONE).strftime('%H:%M:%S')
+    timing = (f"<text_tag color='{color}'>{label} · {math.ceil(age)} 秒</text_tag>\n"
+              f"触发 **{stamp:%H:%M:%S}**　发出 **{sent}**　上海时间")
+    if age>30:
+        timing += f"\n最新复核　{checked[11:19]}"
+    msg['card']['body']['elements'].insert(0,dict(tag='markdown',content=timing))
+    return json.dumps(msg,ensure_ascii=False,allow_nan=False), None
+
+
+
+def post(path, payload, before_send=None):
     conn = http.client.HTTPSConnection('open.feishu.cn', timeout=4)
     try:
         try:
             conn.connect()
         except OSError:
             return 'retry', 'connect_failed'
+        if before_send is not None:
+            payload, reason = before_send()
+            if reason:
+                if reason == 'wait_for_minute':
+                    return 'retry', reason
+                return ('expired' if reason=='ttl' else 'suppressed'), reason
         # After transmission starts, only an explicit rate rejection is safe to retry.
         conn.request('POST', path, payload.encode(), {'Content-Type': 'application/json'})
         response = conn.getresponse()
@@ -101,20 +184,28 @@ def post(path, payload):
 
 
 def dispatch_one(db, path, transport=post, clock=time.time):
-    now = clock()
     with db:
         db.execute('BEGIN IMMEDIATE')
-        db.execute("UPDATE outbox SET status='expired',reason='ttl',finished=? WHERE status='pending' AND expires<=?", (now, now))
+        now = clock()
+        db.execute("""UPDATE outbox SET status='expired',reason='ttl',finished=?
+                      WHERE status='pending' AND (expires<? OR (expires=? AND tier!='watch'))""", (now, now, now))
         row = db.execute("""SELECT * FROM outbox WHERE status='pending' AND next_try<=?
-                            ORDER BY endpoint,product LIMIT 1""", (now,)).fetchone()
+                            ORDER BY CASE tier WHEN 'confirmed' THEN 0 ELSE 1 END,endpoint,product LIMIT 1""", (now,)).fetchone()
         if row is None:
             return False
-        recent = db.execute("""SELECT count(*) FROM outbox
+        payload, reject = prepare_delivery(db, row, now)
+        if reject == 'wait_for_minute':
+            db.execute('UPDATE outbox SET next_try=? WHERE id=?',(now+0.5,row['id']))
+            return True
+        if reject:
+            db.execute("UPDATE outbox SET status='suppressed',reason=?,finished=? WHERE id=?", (reject,now,row['id']))
+            return True
+        recent, watches = db.execute("""SELECT count(*),coalesce(sum(tier='watch'),0) FROM outbox
                                WHERE status IN ('sent','unknown','sending')
-                               AND coalesce(finished,created)>?""", (now-GROUP_WINDOW,)).fetchone()[0]
-        if recent >= GROUP_LIMIT:
-            db.execute("UPDATE outbox SET status='suppressed',reason='group_limit',finished=? WHERE id=?",
-                       (now, row['id']))
+                               AND coalesce(finished,created)>?""", (now-GROUP_WINDOW,)).fetchone()
+        if recent >= GROUP_LIMIT or (row['tier']=='watch' and watches >= WATCH_LIMIT):
+            db.execute("UPDATE outbox SET status='suppressed',reason=?,finished=? WHERE id=?",
+                       ('group_limit' if recent>=GROUP_LIMIT else 'watch_limit',now,row['id']))
             return True
         attempt = row['attempts'] + 1
         if attempt > MAX_ATTEMPTS:
@@ -122,9 +213,25 @@ def dispatch_one(db, path, transport=post, clock=time.time):
                        (now, row['id']))
             return True
         db.execute("UPDATE outbox SET status='sending', attempts=? WHERE id=?", (attempt, row['id']))
-        db.execute("INSERT INTO delivery_attempts(event_id,attempt,started,outcome) VALUES(?,?,?,'sending')",
-                   (row['id'], attempt, now))
-    status, reason = transport(path, row['payload'])
+        db.execute("INSERT INTO delivery_attempts(event_id,attempt,started,outcome,payload) VALUES(?,?,?,'sending',?)",
+                   (row['id'], attempt, now, None if transport is post else payload))
+    def before_send():
+        # TLS setup may cross a minute boundary, the freshness band or expiry.
+        with db:
+            db.execute('BEGIN IMMEDIATE')
+            started = clock()
+            if started > row['expires'] or (started == row['expires'] and row['tier'] != 'watch'):
+                wire, reason = None, 'ttl'
+            else:
+                wire, reason = prepare_delivery(db, row, started)
+            db.execute('UPDATE delivery_attempts SET payload=? WHERE event_id=? AND attempt=?',
+                       (wire,row['id'],attempt))
+            return wire, reason
+
+    if transport is post:
+        status, reason = post(path, payload, before_send=before_send)
+    else:
+        status, reason = transport(path, payload)
     finished = clock()
     delay = min(30, 2 ** min(5, row['attempts'] + 1))
     outcome = status

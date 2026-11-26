@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from marginlab.cache import cutoff_for
 from marginlab.coverage import ZONE
-from marginlab.feishu import dispatch_one, load_webhook
+from marginlab.feishu import dispatch_one, load_webhook, preview_card
 from marginlab.logging_setup import DailyLogHandler, EVENT_LOGGER, event
 from marginlab.signals import advance, initialize, open_market, open_state
 from marginlab.tqfeed import PRODUCTS
@@ -103,8 +103,8 @@ def main():
                     db.execute("DELETE FROM outbox WHERE endpoint<? AND status NOT IN ('pending','sending')", (cutoff,))
                 last_pruned = now.date()
             if args.preview:
-                row = db.execute('SELECT payload FROM outbox ORDER BY endpoint DESC,id LIMIT 1').fetchone()
-                print(json.dumps(json.loads(row[0]), ensure_ascii=False, indent=2) if row else 'No signal in retained observations.')
+                row = db.execute("SELECT payload FROM outbox WHERE tier!='record' ORDER BY endpoint DESC,id LIMIT 1").fetchone()
+                print(json.dumps(preview_card(json.loads(row[0])), ensure_ascii=False, indent=2) if row else 'No signal in retained observations.')
             if args.once or args.preview:
                 break
             if thread and not thread.is_alive():

@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block styles %}
+<style>
+.preview-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px;margin:18px 0}
+.preview-card {background:white;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.preview-title {background:#f2ebfa;padding:16px 18px;color:#532c72}
+.preview-title h2 {font-size:16px;margin:0 0 6px}
+.preview-title small {color:#65506e}
+.preview-section {padding:12px 18px;line-height:1.7;white-space:pre-line}
+.preview-section + .preview-section {border-top:1px solid var(--line)}
+.timing {display:table;border-radius:4px;padding:0 6px;color:#1d504f;background:#dbf3ed}
+.timing.yellow {background:#fff0b9;color:#624b00}.timing.orange {background:#ffe2c7;color:#7b3913}
+</style>
+{% endblock %}
+{% block content %}
+<h1>信号卡片测试预览</h1>
+<p>本地行情回放 · 飞书群推送已关闭</p>
+<div class="preview-grid">
+{% for card in cards %}
+<article class="preview-card">
+<div class="preview-title"><h2>{{ card.header.title.content }}</h2><small>{{ card.header.subtitle.content }}</small></div>
+{% for section in card.body.elements if section.tag == 'markdown' %}
+<div class="preview-section">{% if section.label %}<b class="timing {{ section.tone }}">{{ section.label }}</b>{% endif %}{% for span in section.content.split('**') %}{% if loop.index is even %}<strong>{{ span }}</strong>{% else %}{{ span }}{% endif %}{% endfor %}</div>
+{% endfor %}
+</article>
+{% else %}
+<p>本地信号库暂无可预览的卡片。</p>
+{% endfor %}
+</div>
+{% endblock %}

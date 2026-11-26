@@ -10,11 +10,12 @@ import pandas as pd
 
 from .analytics import DriftConfig, price_visits, rolling_metrics
 from .coverage import ZONE
-from .feishu import TTL, card
+from .feishu import TTL, WATCH_TTL, card
+from .watch import add_comovement, observation_events, smile_wings
 from .logging_setup import event
 from .tqfeed import PRODUCTS
 
-VERSION = 'minute-v1'
+VERSION = 'minute-v2'
 CONFIG = DriftConfig()
 MINUTE = timedelta(minutes=1)
 TRADING_MINUTES = (*range(571, 691), *range(781, 901))
@@ -57,6 +58,14 @@ def initialize(db):
     db.executescript(DDL)
     # The CLI holds the exclusive process lock before recovery.
     with db:
+        columns = {r[1] for r in db.execute('PRAGMA table_info(outbox)')}
+        if 'tier' not in columns:
+            db.execute("ALTER TABLE outbox ADD COLUMN tier TEXT NOT NULL DEFAULT 'confirmed'")
+            db.execute('ALTER TABLE outbox ADD COLUMN context TEXT')
+            db.execute('ALTER TABLE delivery_attempts ADD COLUMN payload TEXT')
+            db.execute("UPDATE outbox SET status='suppressed',reason='rule_upgrade' WHERE status='pending'")
+        db.execute("""INSERT OR IGNORE INTO checkpoints(product,version,endpoint,states)
+                      SELECT product,?,endpoint,states FROM checkpoints WHERE version='minute-v1'""", (VERSION,))
         now = time.time()
         db.execute("UPDATE delivery_attempts SET outcome='unknown',reason='interrupted_send',finished=? WHERE outcome='sending'", (now,))
         db.execute("UPDATE outbox SET status='unknown',reason='interrupted_send',finished=? WHERE status='sending'", (now,))
@@ -78,7 +87,7 @@ def day_inputs(market, product, day, cursor, until):
             (PRODUCTS[product]['index'], (first-MINUTE).isoformat(), (last-MINUTE).isoformat()))}
         snaps = {r[0]: r[1:] for r in market.execute(
             """SELECT timestamp,value,quality,json_extract(details,'$.sampling'),
-                      json_extract(details,'$.market_heartbeat_epoch'),json_extract(details,'$.recovery')
+                      json_extract(details,'$.market_heartbeat_epoch'),json_extract(details,'$.recovery'),details,quotes
                FROM tq_snapshots WHERE product=? AND timestamp BETWEEN ? AND ?""",
             (product, first.isoformat(), last.isoformat()))}
     if not bars and not snaps and (cursor.date() != day or cursor.hour == 0):
@@ -92,12 +101,13 @@ def day_inputs(market, product, day, cursor, until):
         high, low, close = bar or (None, None, None)
         valid_bar = all(x is not None and math.isfinite(x) and x > 0 for x in (high, low, close))
         vix = None
+        wings = {}
         if not valid_bar:
             quality = 'missing_bar'
         elif not snap:
             quality = 'missing_snapshot'
         else:
-            value, quality, sampling, heartbeat, recovery = snap
+            value, quality, sampling, heartbeat, recovery, details, quotes = snap
             if quality == 'valid':
                 epoch = t.replace(tzinfo=ZONE).timestamp()
                 if (sampling == 'last-known-before-boundary' and not recovery
@@ -105,9 +115,10 @@ def day_inputs(market, product, day, cursor, until):
                         and value is not None and math.isfinite(value) and value > 0
                         and t.strftime('%H:%M') not in ('14:58', '14:59', '15:00')):
                     vix = value
+                    wings = smile_wings(t.isoformat(), details, quotes)
                 else:
                     quality = 'non_live'
-        rows.append((t.isoformat(), high, low, close, vix, quality))
+        rows.append((t.isoformat(), high, low, close, vix, quality, wings))
     return rows
 
 
@@ -153,18 +164,23 @@ def evaluate(db, product, rows, states):
         change = (metrics[key] / metrics[key].shift(CONFIG.horizon) - 1) * 100
         complete = metrics[key].rolling(CONFIG.horizon + 1).count() == CONFIG.horizon + 1
         metrics[key+'_change'] = change.where(complete)
+    add_comovement(metrics)
     alerts = []
     for row in metrics.iloc[len(previous):].itertuples():
-        triggers = []
+        visit = visits.get(row.endpoint)
+        prior_active = states.get('active', {})
+        triggers = observation_events(row, visit, anchor, states, rows[row.Index-len(previous)][-1])
+        active = states['active']
+
         if known.iloc[row.Index] == CONFIG.persistence:
             state = {'异常升波': 'up', '异常降波': 'down'}.get(row.state, 'normal')
+            active['residual'] = state
             if state != states.get('residual') and state != 'normal':
                 up = state == 'up'
                 triggers.append(dict(rule='residual', direction=state, value=row.accumulated*100,
                                      threshold=(row.upper if up else row.lower)*100,
                                      percentile=95 if up else 5))
             states['residual'] = state
-        visit = visits.get(row.endpoint)
         if visit and visit['drift'] is not None:
             side = visit['direction']
             state = visit['state']
@@ -173,9 +189,55 @@ def evaluate(db, product, rows, states):
                 triggers.append(dict(rule='revisit', direction=direction, value=100*visit['drift'],
                                      entry=side, matches=visit['matches'], anchor=anchor['price']))
             states[side] = state
+        # A confirmed visit remains current only while spot stays in its band.
+        if anchor and anchor['low'] <= row.close <= anchor['high'] and math.isfinite(row.vix):
+            if visit:
+                if visit['state'].endswith('已确认'):
+                    active['revisit'] = 'up' if visit['drift'] > 0 else 'down'
+            elif 'revisit' in prior_active:
+                active['revisit'] = prior_active['revisit']
+        since = states.get('since', {})
+        states['since'] = {rule: since.get(rule, row.endpoint) if prior_active.get(rule)==direction else row.endpoint
+                           for rule, direction in active.items() if direction}
         if triggers:
-            alerts.append((row.endpoint, card(product, row.endpoint, row, triggers), triggers))
+            tier = classify(triggers, states, product, row.endpoint)
+            fields = ('vix','close','vix_change','close_change','corr_return')
+            context = {k:float(getattr(row,k)) if math.isfinite(getattr(row,k)) else None for k in fields}
+            context['corr_zone'] = states.get('corr', {}).get('zone')
+            alerts.append((row.endpoint, context, triggers, tier))
     return states, alerts
+
+
+def classify(triggers, states, product, stamp):
+    """Keep every transition, tagging which evidence can contribute to a notification."""
+    recent = states.setdefault('watch_episodes', {})
+    confirmed = {item['rule'] for item in triggers if item.get('level', 'confirmed') == 'confirmed'}
+    parents = {'residual':'residual_watch', 'revisit':'baseline'}
+    epoch = datetime.fromisoformat(stamp).replace(tzinfo=ZONE).timestamp()
+    eligible = False
+    for item in triggers:
+        rule = item['rule']
+        level = item.setdefault('level', 'confirmed')
+        item['since'] = states['since'].get(rule)
+        if level == 'context':
+            item['policy'] = 'record_only'
+        elif level == 'confirmed':
+            parent = recent.get(parents[rule])
+            if parent and parent['direction'] == item['direction'] and parent['stamp'][:10] == stamp[:10]:
+                item['related_event'] = parent['id']
+            item['policy'] = 'notify'
+        else:
+            last = recent.get(rule)
+            if rule in {parents[k] for k in confirmed}:
+                item['policy'] = 'covered_by_confirmation'
+            elif last and last['direction'] == item['direction'] and epoch-last['epoch'] < 600:
+                item.update(policy='cooldown', related_event=last['id'])
+            else:
+                item['policy'] = 'notify'
+                recent[rule] = dict(id=f'{VERSION}/{product}/{stamp}', direction=item['direction'],
+                                    stamp=stamp, epoch=epoch)
+                eligible = True
+    return 'confirmed' if confirmed else 'watch' if eligible else 'record'
 
 
 def advance(market, db, product, now, live_since=None):
@@ -203,17 +265,26 @@ def advance(market, db, product, now, live_since=None):
                 created = time.time()
                 with db:
                     db.executemany('INSERT OR IGNORE INTO observations VALUES(?,?,?,?,?,?,?)',
-                                   [(product, *r) for r in rows])
-                    for stamp, payload, triggers in alerts:
+                                   [(product, *r[:-1]) for r in rows])
+                    for stamp, context, triggers, tier in alerts:
                         event_id = f'{VERSION}/{product}/{stamp}'
                         boundary = datetime.fromisoformat(stamp).replace(tzinfo=ZONE).timestamp()
-                        send = live_since is not None and boundary >= live_since and created < boundary + TTL
+                        ttl = WATCH_TTL if tier == 'watch' else TTL
+                        status, reason = 'observed', None
+                        if tier == 'record':
+                            reason = 'cooldown' if any(t['policy']=='cooldown' for t in triggers) else 'record_only'
+                        elif live_since is not None and boundary >= live_since:
+                            fresh = created <= boundary+ttl if tier=='watch' else created < boundary+ttl
+                            status = 'pending' if fresh else 'expired'
+                            reason = 'ttl' if status=='expired' else None
+                        display = [t for t in triggers if t['policy']=='notify'] or triggers
+                        payload = card(product, stamp, context, display)
                         inserted = db.execute("""INSERT OR IGNORE INTO outbox
-                                      (id,product,endpoint,payload,status,created,expires)
-                                      VALUES(?,?,?,?,?,?,?)""",
+                                      (id,product,endpoint,payload,status,created,expires,tier,context,reason)
+                                      VALUES(?,?,?,?,?,?,?,?,?,?)""",
                                    (event_id, product, stamp,
                                     json.dumps(payload, ensure_ascii=False, allow_nan=False),
-                                    'pending' if send else 'observed', created, boundary+TTL))
+                                    status, created, boundary+ttl, tier, json.dumps(context,allow_nan=False), reason))
                         if inserted.rowcount:
                             db.executemany('INSERT INTO signal_triggers VALUES(?,?,?,?)',
                                            [(event_id, item['rule'], item['direction'],
@@ -222,7 +293,7 @@ def advance(market, db, product, now, live_since=None):
                     db.execute('INSERT OR REPLACE INTO checkpoints VALUES(?,?,?,?)',
                                (product, VERSION, rows[-1][0], json.dumps(states)))
                 event('signal_minutes_processed', product=product, endpoint=rows[-1][0],
-                      minutes=len(rows), alerts=len(alerts), quality=rows[-1][-1],
+                      minutes=len(rows), alerts=len(alerts), quality=rows[-1][-2],
                       compute_ms=round((created-ready_at)*1000),
                       input_lag_ms=round((ready_at-datetime.fromisoformat(rows[-1][0]).replace(tzinfo=ZONE).timestamp())*1000))
         day += timedelta(days=1)
